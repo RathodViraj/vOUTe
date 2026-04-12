@@ -30,3 +30,9 @@ func ConnectMongoDB() (*mongo.Client, error) {
 
 	return client, nil
 }
+
+func CloseMongoDB(client *mongo.Client) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return client.Disconnect(ctx)
+}

@@ -19,7 +19,7 @@ type bookmarkRepo struct {
 	voteCollection string
 }
 
-func NewBookmarkRepo(db *mongo.Database, vc string) BookmarkRepository {
+func NewBookmarkRepository(db *mongo.Database, vc string) BookmarkRepository {
 	return &bookmarkRepo{
 		mongoDB:        db,
 		voteCollection: vc,

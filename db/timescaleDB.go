@@ -23,3 +23,7 @@ func ConnectTimescaleDB() (*sql.DB, error) {
 
 	return db, nil
 }
+
+func CloseTimescaleDB(db *sql.DB) error {
+	return db.Close()
+}

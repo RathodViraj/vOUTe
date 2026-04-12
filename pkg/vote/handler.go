@@ -18,6 +18,7 @@ type VoteHandler interface {
 	UpdateVote(c *gin.Context)
 	EditTitle(c *gin.Context)
 	GetPolls(c *gin.Context)
+	AddVoteRoutes(r *gin.Engine)
 }
 
 type voteHandler struct {
@@ -30,7 +31,7 @@ func NewVoteHandler(service VoteService) VoteHandler {
 	}
 }
 
-func (h *voteHandler) AddVotePaths(r *gin.Engine) {
+func (h *voteHandler) AddVoteRoutes(r *gin.Engine) {
 	voteGroup := r.Group("/vote")
 	{
 		voteGroup.POST("/create", h.CreateVote)

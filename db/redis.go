@@ -32,3 +32,7 @@ func ConnectRedis() (*redis.Client, error) {
 
 	return client, nil
 }
+
+func CloseRedis(client *redis.Client) error {
+	return client.Close()
+}

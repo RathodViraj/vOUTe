@@ -10,7 +10,7 @@ import (
 )
 
 type BookmarksHandler interface {
-	RegisterPaths(r *gin.Engine)
+	AddBookmarksRoutes(r *gin.Engine)
 	GetBookMarks(c *gin.Context)
 	ChangeBookMarks(c *gin.Context)
 	RemoveAllBookmarks(c *gin.Context)
@@ -26,7 +26,7 @@ func NewBookmarksHandler(s BookmarkService) BookmarksHandler {
 	}
 }
 
-func (h *bookmarksHandler) RegisterPaths(r *gin.Engine) {
+func (h *bookmarksHandler) AddBookmarksRoutes(r *gin.Engine) {
 	bookmarksGroup := r.Group("bookmarks")
 	{
 		bookmarksGroup.GET("/:userID", h.GetBookMarks)

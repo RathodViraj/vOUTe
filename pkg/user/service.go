@@ -2,6 +2,7 @@ package user
 
 import (
 	"context"
+	"fmt"
 	"time"
 	"voute/pkg/utils"
 )
@@ -27,6 +28,19 @@ func NewUserService(userRepo UserRepository) UserService {
 }
 
 func (s *userService) CreateUser(ctx context.Context, name, email, password, role string) (*User, error) {
+	_, err := s.GetUserByEmail(ctx, email)
+	if err == nil {
+		return nil, fmt.Errorf("user with email %s already exists", email)
+	}
+
+	if role == "admin" {
+		if !utils.CheckPasswordHash(password, utils.GetEnv("ADMIN_PASSWOR", "admin123")) {
+			return nil, fmt.Errorf("invalid admin password")
+		}
+	} else if role != "user" {
+		role = "user"
+	}
+
 	hashPwd, err := utils.HashPassword(password)
 	if err != nil {
 		return nil, err
@@ -35,7 +49,7 @@ func (s *userService) CreateUser(ctx context.Context, name, email, password, rol
 		Username:  name,
 		Email:     email,
 		Password:  hashPwd,
-		Role:      "user",
+		Role:      role,
 		CreatedAt: time.Now().Unix(),
 	}
 	err = s.userRepo.CreateUser(ctx, u)

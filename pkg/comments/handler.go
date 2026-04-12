@@ -10,7 +10,7 @@ import (
 )
 
 type CommentHandler interface {
-	RegisterRoutes(r *gin.Engine)
+	AddCommentsRoutes(r *gin.Engine)
 	CreateComment(c *gin.Context)
 	GetCommentsByVoteID(c *gin.Context)
 	DeleteComment(c *gin.Context)
@@ -26,7 +26,7 @@ func NewCommentHandler(service CommentService) CommentHandler {
 	}
 }
 
-func (h *commentHandler) RegisterRoutes(r *gin.Engine) {
+func (h *commentHandler) AddCommentsRoutes(r *gin.Engine) {
 	comments := r.Group("/comments")
 	{
 		comments.POST("/", h.CreateComment)

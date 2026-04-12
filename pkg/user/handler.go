@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"time"
+	"voute/pkg/bloom"
 	"voute/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -15,11 +16,13 @@ type UserHandler interface {
 
 type userHandler struct {
 	userService UserService
+	bloom       *bloom.Filter
 }
 
-func newHandler(srv UserService) UserHandler {
+func NewHandler(srv UserService, bf *bloom.Filter) UserHandler {
 	return &userHandler{
 		userService: srv,
+		bloom:       bf,
 	}
 }
 
@@ -33,8 +36,23 @@ func (h *userHandler) AddUserRoute(r *gin.Engine) {
 	r.DELETE("/user/delete", h.deleteUser)
 }
 
+func (h *userHandler) CheckUsernameExists(c *gin.Context) {
+	username := c.Query("username")
+	if username == "" {
+		response.SendResponse(c, http.StatusBadRequest, "error", "username is required", nil)
+		return
+	}
+
+	if h.bloom.MightExist(username) {
+		response.SendResponse(c, http.StatusOK, "success", "username might exist", nil)
+		return
+	}
+
+	response.SendResponse(c, http.StatusOK, "success", "username does not exist", nil)
+}
+
 func (h *userHandler) createUser(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	var req CreateUserRequest
@@ -43,12 +61,18 @@ func (h *userHandler) createUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.CreateUser(ctx, req.Username, req.Email, req.Password, req.Role)
-	if err != nil {
-		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to create user", nil)
+	if h.bloom.MightExist(req.Username) {
+		response.SendResponse(c, http.StatusBadRequest, "error", "username already exists", nil)
 		return
 	}
 
+	user, err := h.userService.CreateUser(ctx, req.Username, req.Email, req.Password, req.Role)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to create user", err.Error())
+		return
+	}
+
+	h.bloom.Add(req.Username)
 	response.SendResponse(c, http.StatusOK, "success", "user created successfully", user)
 }
 
@@ -59,7 +83,7 @@ func (h *userHandler) getUserByEmail(c *gin.Context) {
 
 	user, err := h.userService.GetUserByEmail(ctx, email)
 	if err != nil {
-		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get user", nil)
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get user", err.Error())
 		return
 	}
 
