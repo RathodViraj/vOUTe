@@ -136,14 +136,13 @@ func (f *Filter) LoadFromRedis(ctx context.Context) (bool, error) {
 
 func (f *Filter) SeedFromMongoDB(ctx context.Context, col *mongo.Collection) error {
 	projection := options.Find().SetProjection(
-		bson.D{
-			{Key: "username", Value: 1},
-			{Key: "_id", Value: 0},
-			{Key: "email", Value: 0},
+		bson.M{
+			"_id":      0,
+			"username": 1,
 		},
 	)
 
-	cur, err := col.Find(ctx, bson.D{}, projection)
+	cur, err := col.Find(ctx, bson.M{"is_deleted": false}, projection)
 	if err != nil {
 		return fmt.Errorf("bloom: mongo find: %w", err)
 	}

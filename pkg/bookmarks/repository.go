@@ -2,6 +2,7 @@ package bookmarks
 
 import (
 	"context"
+	"voute/pkg/utils"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -32,8 +33,12 @@ func (r *bookmarkRepo) AddToBookmakrs(ctx context.Context, b *Bookmark) error {
 }
 
 func (r *bookmarkRepo) GetBookmakrs(ctx context.Context, userID string) ([]Bookmark, error) {
+	parsedUserID, err := utils.ParseSnowflakeID(userID)
+	if err != nil {
+		return nil, err
+	}
 	filter := &bson.M{
-		"user_id": userID,
+		"user_id": parsedUserID,
 	}
 	cur, err := r.mongoDB.Collection(r.voteCollection).Find(ctx, filter)
 	if err != nil {
@@ -52,10 +57,14 @@ func (r *bookmarkRepo) GetBookmakrs(ctx context.Context, userID string) ([]Bookm
 }
 
 func (r *bookmarkRepo) RemoveAllBookmarks(ctx context.Context, userID string) error {
-	filter := &bson.M{
-		"user_id": userID,
+	parsedUserID, err := utils.ParseSnowflakeID(userID)
+	if err != nil {
+		return err
 	}
-	_, err := r.mongoDB.Collection(r.voteCollection).DeleteMany(ctx, filter)
+	filter := &bson.M{
+		"user_id": parsedUserID,
+	}
+	_, err = r.mongoDB.Collection(r.voteCollection).DeleteMany(ctx, filter)
 	return err
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 	"voute/pkg/config"
+	"voute/pkg/utils"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -34,17 +35,32 @@ func NewUserRepository(mongoDB *mongo.Database) UserRepository {
 }
 
 func (r *userRepo) CreateUser(ctx context.Context, user *User) error {
-	_, err := r.mongoDB.Collection(r.collenction).InsertOne(ctx, user)
-	return err
+	res, err := r.mongoDB.Collection(r.collenction).InsertOne(ctx, user)
+	if err != nil {
+		return err
+	}
+
+	id, ok := res.InsertedID.(int64)
+	if !ok {
+		return errors.New("failed to convert inserted ID to int64")
+	}
+
+	user.ID = id
+	return nil
 }
 
 func (r *userRepo) GetUserByID(ctx context.Context, id string) (*User, error) {
+	parsedID, err := utils.ParseSnowflakeID(id)
+	if err != nil {
+		return nil, err
+	}
+
 	var u User
 	filter := bson.M{
-		"_id":        id,
+		"_id":        parsedID,
 		"is_deleted": false,
 	}
-	err := r.mongoDB.Collection(r.collenction).FindOne(ctx, filter).Decode(&u)
+	err = r.mongoDB.Collection(r.collenction).FindOne(ctx, filter).Decode(&u)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, nil
@@ -91,7 +107,7 @@ func (r *userRepo) GetUserByEmail(ctx context.Context, email string) (*User, err
 	err := r.mongoDB.Collection(r.collenction).FindOne(ctx, filter).Decode(&u)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
-			return nil, nil
+			return nil, errors.New("user does not exist")
 		}
 		return nil, err
 	}
@@ -100,8 +116,13 @@ func (r *userRepo) GetUserByEmail(ctx context.Context, email string) (*User, err
 }
 
 func (r *userRepo) UpdateUser(ctx context.Context, username, email, id string) error {
+	parsedID, err := utils.ParseSnowflakeID(id)
+	if err != nil {
+		return err
+	}
+
 	filter := bson.M{
-		"_id":        id,
+		"_id":        parsedID,
 		"is_deleted": false,
 	}
 	update := bson.M{
@@ -110,7 +131,7 @@ func (r *userRepo) UpdateUser(ctx context.Context, username, email, id string) e
 			"email":    email,
 		},
 	}
-	_, err := r.mongoDB.Collection(r.collenction).UpdateOne(ctx, filter, update)
+	_, err = r.mongoDB.Collection(r.collenction).UpdateOne(ctx, filter, update)
 	return err
 }
 
@@ -129,8 +150,13 @@ func (r *userRepo) UpdatePassword(ctx context.Context, email, hashPwd string) er
 }
 
 func (r *userRepo) DeleteUser(ctx context.Context, id string) error {
+	parsedID, err := utils.ParseSnowflakeID(id)
+	if err != nil {
+		return err
+	}
+
 	filter := bson.M{
-		"_id":        id,
+		"_id":        parsedID,
 		"is_deleted": false,
 	}
 	now := time.Now()
@@ -140,6 +166,6 @@ func (r *userRepo) DeleteUser(ctx context.Context, id string) error {
 			"deleted_at": &now,
 		},
 	}
-	_, err := r.mongoDB.Collection(r.collenction).UpdateOne(ctx, filter, update)
+	_, err = r.mongoDB.Collection(r.collenction).UpdateOne(ctx, filter, update)
 	return err
 }

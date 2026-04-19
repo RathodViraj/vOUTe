@@ -2,6 +2,7 @@ package comments
 
 import (
 	"context"
+	"voute/pkg/utils"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -31,9 +32,13 @@ func (r *commentRepo) CreateComment(ctx context.Context, comment *Comment) error
 }
 
 func (r *commentRepo) GetCommentsByVoteID(ctx context.Context, voteID string) ([]*Comment, error) {
+	parsedVoteID, err := utils.ParseSnowflakeID(voteID)
+	if err != nil {
+		return nil, err
+	}
 	var comments []*Comment
 	filter := bson.M{
-		"vote_id":    voteID,
+		"vote_id":    parsedVoteID,
 		"is_deleted": false,
 	}
 
@@ -56,15 +61,19 @@ func (r *commentRepo) GetCommentsByVoteID(ctx context.Context, voteID string) ([
 }
 
 func (r *commentRepo) DeleteComment(ctx context.Context, commentID string) error {
+	parsedCommentID, err := utils.ParseSnowflakeID(commentID)
+	if err != nil {
+		return err
+	}
 	update := map[string]any{
 		"$set": map[string]any{
 			"is_deleted": true,
 		},
 	}
-	_, err := r.mongoDB.Collection(r.collectionName).UpdateOne(
+	_, err = r.mongoDB.Collection(r.collectionName).UpdateOne(
 		ctx,
 		map[string]any{
-			"_id": commentID,
+			"_id": parsedCommentID,
 		},
 		update,
 	)

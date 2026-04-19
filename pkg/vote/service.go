@@ -3,6 +3,7 @@ package vote
 import (
 	"context"
 	"time"
+	"voute/pkg/utils"
 )
 
 type VoteService interface {
@@ -11,8 +12,7 @@ type VoteService interface {
 	ListVote(ctx context.Context, skip, take int) ([]*Vote, error)
 	GetVoteByID(ctx context.Context, id string) (*Vote, error)
 	GetVotesByCreatorID(ctx context.Context, creatorID string, skip, take int) ([]*Vote, error)
-	AddVote(ctx context.Context, voteID, optionID string) error
-	RemoveVote(ctx context.Context, voteID, optionID string) error
+	AddVote(ctx context.Context, userID, voteID, optionID string, count int64) error
 	CloseVote(ctx context.Context, voteID string) error
 	EditTitle(ctx context.Context, voteID, newTitle string) error
 	GetHistoricData(ctx context.Context, voteID string) (*HistoricDataResponse, error)
@@ -30,14 +30,21 @@ func NewVoteService(repo VoteRepository) VoteService {
 }
 
 func (s *voteService) CreateVote(ctx context.Context, vote *CreateVoteInMogo, options []Option) error {
+	if vote.ID == 0 {
+		vote.ID = utils.GenerateSnowflakeID()
+	}
 	vote.CreatedAt = time.Now().Unix()
+	for i := range options {
+		options[i].ID = utils.GenerateSnowflakeID()
+		options[i].VoteID = vote.ID
+	}
 	if err := s.repo.CreateVoteInMongo(ctx, vote); err != nil {
 		return err
 	}
 
-	optionIDs := make([]string, len(options))
-	for i, option := range options {
-		optionIDs[i] = option.ID
+	optionIDs := make([]int64, len(options))
+	for i := range options {
+		optionIDs[i] = options[i].ID
 	}
 	if err := s.repo.AddOptionsInMongo(ctx, vote.ID, options); err != nil {
 		s.repo.HardDeleteVote(ctx, vote.ID)
@@ -92,12 +99,8 @@ func (s *voteService) GetVotesByCreatorID(ctx context.Context, creatorID string,
 	return s.repo.GetVotesByCreatorID(ctx, creatorID, skip, take)
 }
 
-func (s *voteService) AddVote(ctx context.Context, voteID, optionID string) error {
-	return s.repo.AddVote(ctx, voteID, optionID)
-}
-
-func (s *voteService) RemoveVote(ctx context.Context, voteID, optionID string) error {
-	return s.repo.RemoveVote(ctx, voteID, optionID)
+func (s *voteService) AddVote(ctx context.Context, userID, voteID, optionID string, count int64) error {
+	return s.repo.AddVote(ctx, userID, voteID, optionID, count)
 }
 
 func (s *voteService) CloseVote(ctx context.Context, voteID string) error {

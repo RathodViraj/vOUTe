@@ -34,7 +34,7 @@ func InitBloomFilter(ctx context.Context, rdb *redis.Client, col *mongo.Collecti
 
 	loaded, err := f.LoadFromRedis(ctx)
 	if err != nil {
-		log.Printf("bloom: load from redis: %w", err)
+		log.Printf("bloom: load from redis: %v", err)
 	}
 
 	if loaded {

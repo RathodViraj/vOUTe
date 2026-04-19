@@ -5,13 +5,21 @@ import (
 	"net/http"
 	"time"
 	"voute/pkg/bloom"
+	"voute/pkg/middleware"
 	"voute/pkg/response"
 
 	"github.com/gin-gonic/gin"
 )
 
 type UserHandler interface {
-	AddUserRoute(r *gin.Engine)
+	AddUserRoutes(r *gin.Engine)
+	checkUsernameExists(c *gin.Context)
+	createUser(c *gin.Context)
+	getUserByEmail(c *gin.Context)
+	getUserByID(c *gin.Context)
+	updateUser(c *gin.Context)
+	updatePassword(c *gin.Context)
+	deleteUser(c *gin.Context)
 }
 
 type userHandler struct {
@@ -26,17 +34,20 @@ func NewHandler(srv UserService, bf *bloom.Filter) UserHandler {
 	}
 }
 
-func (h *userHandler) AddUserRoute(r *gin.Engine) {
-	r.POST("/user/create", h.createUser)
-	r.GET("/user/:id", h.getUserByID)
-	r.GET("/user/:email", h.getUserByEmail)
-	r.GET("/users", h.getUsersByUsername)
-	r.PUT("/user/update", h.updateUser)
-	r.PUT("/user/update-password", h.updatePassword)
-	r.DELETE("/user/delete", h.deleteUser)
+func (h *userHandler) AddUserRoutes(r *gin.Engine) {
+	userGroup := r.Group("/users")
+	{
+		userGroup.GET("/check", h.checkUsernameExists)
+		userGroup.POST("/create", h.createUser)
+		userGroup.GET("/email/:email", h.getUserByEmail)
+		userGroup.GET("/me", middleware.AuthMiddleware(), h.getUserByID)
+		userGroup.PUT("/update", middleware.AuthMiddleware(), h.updateUser)
+		userGroup.PUT("/updatePassword", h.updatePassword)
+		userGroup.DELETE("/delete", middleware.AuthMiddleware(), h.deleteUser)
+	}
 }
 
-func (h *userHandler) CheckUsernameExists(c *gin.Context) {
+func (h *userHandler) checkUsernameExists(c *gin.Context) {
 	username := c.Query("username")
 	if username == "" {
 		response.SendResponse(c, http.StatusBadRequest, "error", "username is required", nil)
@@ -95,7 +106,13 @@ func (h *userHandler) getUserByEmail(c *gin.Context) {
 }
 
 func (h *userHandler) getUserByID(c *gin.Context) {
-	id := c.Param("id")
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	id := claims.UserID
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -111,21 +128,6 @@ func (h *userHandler) getUserByID(c *gin.Context) {
 
 	response.SendResponse(c, http.StatusOK, "success", "user found", user)
 }
-
-func (h *userHandler) getUsersByUsername(c *gin.Context) {
-	username := c.Query("username")
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	users, err := h.userService.GetUsersByUsername(ctx, username, 0, 10)
-	if err != nil {
-		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get users", nil)
-		return
-	}
-
-	response.SendResponse(c, http.StatusOK, "success", "users found", users)
-}
-
 func (h *userHandler) updateUser(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -136,7 +138,13 @@ func (h *userHandler) updateUser(c *gin.Context) {
 		return
 	}
 
-	if err := h.userService.UpdateUser(ctx, req.Username, req.Email, req.ID); err != nil {
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	if err := h.userService.UpdateUser(ctx, req.Username, req.Email, claims.UserID); err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to update user", nil)
 		return
 	}
@@ -163,7 +171,13 @@ func (h *userHandler) updatePassword(c *gin.Context) {
 }
 
 func (h *userHandler) deleteUser(c *gin.Context) {
-	id := c.Query("id")
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	id := claims.UserID
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 

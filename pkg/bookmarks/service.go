@@ -2,6 +2,7 @@ package bookmarks
 
 import (
 	"context"
+	"voute/pkg/utils"
 )
 
 type BookmarkService interface {
@@ -22,9 +23,17 @@ func NewBookmarkService(repo BookmarkRepository) BookmarkService {
 }
 
 func (s *bookmarkService) AddToBookmakrs(ctx context.Context, userID string, voteID string) error {
+	parsedUserID, err := utils.ParseSnowflakeID(userID)
+	if err != nil {
+		return err
+	}
+	parsedVoteID, err := utils.ParseSnowflakeID(voteID)
+	if err != nil {
+		return err
+	}
 	b := &Bookmark{
-		UserID: userID,
-		VoteID: voteID,
+		UserID: parsedUserID,
+		VoteID: parsedVoteID,
 	}
 	return s.repo.AddToBookmakrs(ctx, b)
 }
@@ -38,9 +47,17 @@ func (s *bookmarkService) RemoveAllBookmarks(ctx context.Context, userID string)
 }
 
 func (s *bookmarkService) RemoveFromBookmarks(ctx context.Context, userID string, voteID string) error {
+	parsedUserID, err := utils.ParseSnowflakeID(userID)
+	if err != nil {
+		return err
+	}
+	parsedVoteID, err := utils.ParseSnowflakeID(voteID)
+	if err != nil {
+		return err
+	}
 	b := &Bookmark{
-		UserID: userID,
-		VoteID: voteID,
+		UserID: parsedUserID,
+		VoteID: parsedVoteID,
 	}
 	return s.repo.RemoveFromBookmarks(ctx, b)
 }

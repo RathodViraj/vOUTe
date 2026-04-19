@@ -32,9 +32,12 @@ func (s *userService) CreateUser(ctx context.Context, name, email, password, rol
 	if err == nil {
 		return nil, fmt.Errorf("user with email %s already exists", email)
 	}
+	if err.Error() != "user does not exist" {
+		return nil, err
+	}
 
 	if role == "admin" {
-		if !utils.CheckPasswordHash(password, utils.GetEnv("ADMIN_PASSWOR", "admin123")) {
+		if !utils.CheckPasswordHash(password, utils.GetEnv("ADMIN_PASSWORD", "admin123")) {
 			return nil, fmt.Errorf("invalid admin password")
 		}
 	} else if role != "user" {
@@ -46,6 +49,7 @@ func (s *userService) CreateUser(ctx context.Context, name, email, password, rol
 		return nil, err
 	}
 	u := &User{
+		ID:        utils.GenerateSnowflakeID(),
 		Username:  name,
 		Email:     email,
 		Password:  hashPwd,

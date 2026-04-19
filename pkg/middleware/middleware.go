@@ -9,6 +9,15 @@ import (
 
 const claimsKey = "jwt_claims"
 
+func GetClaims(c *gin.Context) (*Claims, bool) {
+	v, ok := c.Get(claimsKey)
+	if !ok {
+		return nil, false
+	}
+	claims, ok := v.(*Claims)
+	return claims, ok
+}
+
 func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenStr := extractBearer(c)

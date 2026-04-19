@@ -1,7 +1,7 @@
 package user
 
 type User struct {
-	ID        string `json:"id,omitempty" bson:"_id"`
+	ID        int64  `json:"id,string,omitempty" bson:"_id"`
 	Username  string `json:"username" bson:"username"`
 	Password  string `json:"password" bson:"password"`
 	Email     string `json:"email" bson:"email"`
@@ -15,11 +15,10 @@ type CreateUserRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
 	Email    string `json:"email" binding:"required,email"`
-	Role     string `json:"role" binding:"requried,oneof=user admin"`
+	Role     string `json:"role" binding:"required,oneof=user admin"`
 }
 
 type UpdateUserRequest struct {
-	ID       string `json:"id" binding:"required"`
 	Username string `json:"username" binding:"required"`
 	Email    string `json:"email" binding:"required,email"`
 }

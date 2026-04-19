@@ -10,11 +10,11 @@ type TimescaleDBConfig struct {
 
 func LoadTimescaleDBConfig() TimescaleDBConfig {
 	return TimescaleDBConfig{
-		Host:     GetEnvWithDefault("TIMESCALE_DB_HOST", "localhost"),
-		Port:     GetEnvAsInt("TIMESCALE_DB_PORT", 5432),
-		User:     GetEnvWithDefault("TIMESCALE_DB_USER", "your_username"),
-		Password: GetEnvWithDefault("TIMESCALE_DB_PASSWORD", "your_password"),
-		DBName:   GetEnvWithDefault("TIMESCALE_DB_NAME", "your_dbname"),
+		Host:     GetEnvRequired("POSTGRES_HOST"),
+		Port:     GetEnvAsInt("POSTGRES_PORT", 5432),
+		User:     GetEnvRequired("POSTGRES_USER"),
+		Password: GetEnvRequired("POSTGRES_PASSWORD"),
+		DBName:   GetEnvWithDefault("POSTGRES_DB", "voute_timescale"),
 	}
 
 }

@@ -15,8 +15,12 @@ func LoadEnv() {
 	}
 }
 
-func GetEnv(key string) string {
-	return os.Getenv(key)
+func GetEnvRequired(key string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		log.Fatalf("Missing required environment variable: %s", key)
+	}
+	return value
 }
 
 func GetEnvWithDefault(key, defaultValue string) string {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"net/http"
 	"time"
+	"voute/pkg/middleware"
 	"voute/pkg/response"
+	"voute/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,9 +31,9 @@ func NewCommentHandler(service CommentService) CommentHandler {
 func (h *commentHandler) AddCommentsRoutes(r *gin.Engine) {
 	comments := r.Group("/comments")
 	{
-		comments.POST("/", h.CreateComment)
+		comments.POST("/", middleware.AuthMiddleware(), h.CreateComment)
 		comments.GET("/vote/:vote_id", h.GetCommentsByVoteID)
-		comments.DELETE("/:comment_id", h.DeleteComment)
+		comments.DELETE("/:comment_id", middleware.AuthMiddleware(), h.DeleteComment)
 	}
 }
 
@@ -44,9 +46,27 @@ func (h *commentHandler) CreateComment(c *gin.Context) {
 		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request", nil)
 		return
 	}
+
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	userID, err := utils.ParseSnowflakeID(claims.UserID)
+	if err != nil {
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid user id", nil)
+		return
+	}
+	voteID, err := utils.ParseSnowflakeID(req.VoteID)
+	if err != nil {
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid vote id", nil)
+		return
+	}
 	comment := &Comment{
-		UserID:    req.UserID,
-		VoteID:    req.VoteID,
+		ID:        utils.GenerateSnowflakeID(),
+		UserID:    userID,
+		VoteID:    voteID,
 		Content:   req.Content,
 		CreatedAt: time.Now().Unix(),
 	}

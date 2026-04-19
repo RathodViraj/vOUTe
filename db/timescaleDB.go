@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"voute/pkg/config"
+
+	_ "github.com/lib/pq"
 )
 
 func ConnectTimescaleDB() (*sql.DB, error) {

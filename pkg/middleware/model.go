@@ -14,7 +14,7 @@ type MiddleWareDB struct {
 	userCollectioName string
 }
 
-func (d *MiddleWareDB) FetchUserByUsername(ctx context.Context, username string) (string, string, error) {
+func (d *MiddleWareDB) FetchUserByUsername(ctx context.Context, username string) (int64, string, string, error) {
 	filter := bson.M{
 		"username":   username,
 		"is_deleted": false,
@@ -24,36 +24,33 @@ func (d *MiddleWareDB) FetchUserByUsername(ctx context.Context, username string)
 		{Key: "username", Value: 1},
 		{Key: "role", Value: 1},
 		{Key: "password", Value: 1},
-		{Key: "_id", Value: 0},
-		{Key: "id_deleted", Value: 0},
-		{Key: "email", Value: 0},
-		{Key: "created_at", Value: 0},
-		{Key: "deleted_at", Value: 0},
+		{Key: "_id", Value: 1},
 	}
 
 	opts := options.FindOne().SetProjection(projection)
 	result := d.mongoDatabase.Collection(d.userCollectioName).FindOne(ctx, filter, opts)
 	if result.Err() != nil {
 		if errors.Is(result.Err(), mongo.ErrNoDocuments) {
-			return "", "", errors.New("invalid credntials")
+			return 0, "", "", errors.New("invalid credntials")
 		}
-		return "", "", result.Err()
+		return 0, "", "", result.Err()
 	}
 
 	u := struct {
+		ID       int64  `bson:"_id"`
 		Username string `bson:"username"`
 		Role     string `bson:"role"`
 		Password string `bson:"password"`
 	}{}
 
 	if err := result.Decode(&u); err != nil {
-		return "", "", err
+		return 0, "", "", err
 	}
 
-	return u.Password, u.Role, nil
+	return u.ID, u.Password, u.Role, nil
 }
 
-func (d *MiddleWareDB) FetchUserByEmail(ctx context.Context, email string) (string, string, string, error) {
+func (d *MiddleWareDB) FetchUserByEmail(ctx context.Context, email string) (int64, string, string, string, error) {
 	filter := bson.M{
 		"email":      email,
 		"is_deleted": false,
@@ -63,31 +60,28 @@ func (d *MiddleWareDB) FetchUserByEmail(ctx context.Context, email string) (stri
 		{Key: "username", Value: 1},
 		{Key: "role", Value: 1},
 		{Key: "password", Value: 1},
-		{Key: "_id", Value: 0},
-		{Key: "id_deleted", Value: 0},
-		{Key: "email", Value: 0},
-		{Key: "created_at", Value: 0},
-		{Key: "deleted_at", Value: 0},
+		{Key: "_id", Value: 1},
 	}
 
 	opts := options.FindOne().SetProjection(projection)
 	result := d.mongoDatabase.Collection(d.userCollectioName).FindOne(ctx, filter, opts)
 	if result.Err() != nil {
 		if errors.Is(result.Err(), mongo.ErrNoDocuments) {
-			return "", "", "", errors.New("invalid credntials")
+			return 0, "", "", "", errors.New("invalid credntials")
 		}
-		return "", "", "", result.Err()
+		return 0, "", "", "", result.Err()
 	}
 
 	u := struct {
+		ID       int64  `bson:"_id"`
 		Username string `bson:"username"`
 		Role     string `bson:"role"`
 		Password string `bson:"password"`
 	}{}
 
 	if err := result.Decode(&u); err != nil {
-		return "", "", "", err
+		return 0, "", "", "", err
 	}
 
-	return u.Username, u.Password, u.Role, nil
+	return u.ID, u.Username, u.Password, u.Role, nil
 }

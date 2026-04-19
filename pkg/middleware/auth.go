@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"voute/pkg/response"
@@ -25,6 +26,7 @@ func AddDBInMiddleware(mongoDB *mongo.Database, name string) {
 }
 
 type Claims struct {
+	UserID   string `json:"user_id"`
 	UserName string `json:"user_name"`
 	Role     string `json:"role"`
 	jwt.RegisteredClaims
@@ -54,10 +56,11 @@ var (
 	refershTTL = 7 * 24 * time.Hour
 )
 
-func generateTokePair(userName, role string) (*TokenPair, error) {
+func generateTokePair(userID, userName, role string) (*TokenPair, error) {
 	now := time.Now()
 
 	accessClaims := &Claims{
+		UserID:   userID,
 		UserName: userName,
 		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -75,6 +78,7 @@ func generateTokePair(userName, role string) (*TokenPair, error) {
 	}
 
 	refershClaims := &Claims{
+		UserID:   userID,
 		UserName: userName,
 		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -158,7 +162,7 @@ func Login(c *gin.Context) {
 }
 
 func LoginWithUsername(ctx context.Context, req LoginWithUsernameRequest) (*TokenPair, error) {
-	hashPwd, role, err := db.FetchUserByUsername(ctx, req.Username)
+	userID, hashPwd, role, err := db.FetchUserByUsername(ctx, req.Username)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +171,7 @@ func LoginWithUsername(ctx context.Context, req LoginWithUsernameRequest) (*Toke
 		return nil, errors.New("invalid credntials")
 	}
 
-	pair, err := generateTokePair(req.Username, role)
+	pair, err := generateTokePair(strconv.FormatInt(userID, 10), req.Username, role)
 	if err != nil {
 		return nil, errors.New("could not generate tokens")
 	}
@@ -176,7 +180,7 @@ func LoginWithUsername(ctx context.Context, req LoginWithUsernameRequest) (*Toke
 }
 
 func LoginWithEmail(ctx context.Context, req LoginWithEmailRequest) (*TokenPair, error) {
-	username, hashPwd, role, err := db.FetchUserByEmail(ctx, req.Email)
+	userID, username, hashPwd, role, err := db.FetchUserByEmail(ctx, req.Email)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +189,7 @@ func LoginWithEmail(ctx context.Context, req LoginWithEmailRequest) (*TokenPair,
 		return nil, errors.New("invalid credntials")
 	}
 
-	pair, err := generateTokePair(username, role)
+	pair, err := generateTokePair(strconv.FormatInt(userID, 10), username, role)
 	if err != nil {
 		return nil, errors.New("could not generate tokens")
 	}
@@ -211,7 +215,7 @@ func RefershToken(c *gin.Context) {
 
 	// TODO: optionally check a token blacklist / rotation store here
 
-	pair, err := generateTokePair(claims.UserName, claims.Role)
+	pair, err := generateTokePair(claims.UserID, claims.UserName, claims.Role)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "could not genrate tokens", nil)
 		return
@@ -227,7 +231,7 @@ func extractBearer(c *gin.Context) string {
 		return ""
 	}
 
-	parts := strings.SplitN(header, "", 2)
+	parts := strings.SplitN(header, " ", 2)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
 		return ""
 	}

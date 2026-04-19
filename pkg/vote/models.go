@@ -1,14 +1,17 @@
 package vote
 
+import "time"
+
 type Option struct {
-	ID        string `json:"id,omitempty" bson:"_id"`
+	ID        int64  `json:"id,omitempty,string" bson:"_id"`
+	VoteID    int64  `json:"vote_id,string" bson:"vote_id"`
 	Text      string `json:"text" bson:"text"`
 	VoteCount int64  `json:"vote_count" bson:"vote_count"`
 }
 
 type Vote struct {
-	ID          string   `json:"id,omitempty" bson:"_id"`
-	CreatedByID string   `json:"created_by_id" binding:"created_by_id" bson:"created_by_id"`
+	ID          int64    `json:"id,omitempty,string" bson:"_id"`
+	CreatedByID int64    `json:"created_by_id,string" binding:"required" bson:"created_by_id"`
 	Title       string   `json:"title" bson:"title"`
 	Options     []Option `json:"options" bson:"options"`
 	Status      string   `json:"status" binding:"oneof=created live closed" bson:"status"`
@@ -22,28 +25,28 @@ type CreateRequest struct {
 }
 
 type CreateVoteRequest struct {
-	Title       string `json:"title" binding:"required"`
-	CreatedByID string `json:"created_by_id" binding:"created_by_id"`
+	Title string `json:"title" binding:"required"`
 }
 type CreateOptionRequest struct {
-	VoteID string `json:"vote_id" binding:"required"`
-	Text   string `json:"text" binding:"required"`
+	Text string `json:"text" binding:"required"`
 }
 
 type CreateVoteInMogo struct {
-	ID          string `json:"id,omitempty" bson:"_id"`
+	ID          int64  `json:"id,omitempty,string" bson:"_id"`
 	Title       string `json:"title" bson:"title"`
-	CreatedByID string `json:"created_by_id" bson:"created_by_id"`
+	CreatedByID int64  `json:"created_by_id,string" bson:"created_by_id"`
 	Status      string `json:"status" bson:"status"`
 	IsDeleted   bool   `json:"is_deleted" bson:"is_deleted"`
 	CreatedAt   int64  `json:"created_at" bson:"created_at"`
 }
 
-type VoteRequest struct {
-	ID       string `json:"id,omitempty" bson:"_id"`
+type CastVoteRequest struct {
+	ID       string `json:"id,omitempty" bson:"_id,omitempty"`
 	OptionID string `json:"option_id" binding:"required"`
-	Delta    int8   `json:"delta" binding:"required,oneof=1 -1"`
+	Count    int64  `json:"count" binding:"required,min=1"`
 }
+
+type VoteRequest = CastVoteRequest
 
 type HistoricDataResponse struct {
 	VoteID      string
@@ -51,7 +54,17 @@ type HistoricDataResponse struct {
 }
 
 type HistoricOptionsData struct {
-	Timestamp int64
+	Timestamp time.Time
 	OptionID  string
 	VoteCount int
+}
+
+type PollSnapshot struct {
+	PollId  string           `json:"poll_id"`
+	Options []OptionSnapshot `json:"options"`
+}
+
+type OptionSnapshot struct {
+	OptionId  string `json:"option_id"`
+	VoteCount int64  `json:"vote_count"`
 }

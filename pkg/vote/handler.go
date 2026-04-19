@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+	"voute/pkg/middleware"
 	"voute/pkg/response"
+	"voute/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,16 +34,18 @@ func NewVoteHandler(service VoteService) VoteHandler {
 }
 
 func (h *voteHandler) AddVoteRoutes(r *gin.Engine) {
-	voteGroup := r.Group("/vote")
-	{
-		voteGroup.POST("/create", h.CreateVote)
-		voteGroup.GET("/:voteID", h.GetVoteByID)
-		voteGroup.GET("/:userID", h.GetVotesByCreatorID)
-		voteGroup.PATCH("/:voteID", h.CloseVote)
-		voteGroup.PUT("/editTitle", h.EditTitle)
-		voteGroup.GET("", h.GetPolls)
-		voteGroup.GET("/fromIds", h.GetFromIDs)
+	register := func(group *gin.RouterGroup) {
+		group.POST("/create", middleware.AuthMiddleware(), h.CreateVote)
+		group.GET("/:voteID", h.GetVoteByID)
+		group.GET("/creator", middleware.AuthMiddleware(), h.GetVotesByCreatorID)
+		group.PATCH("/:voteID", h.CloseVote)
+		group.PUT("/editTitle", h.EditTitle)
+		group.GET("", h.GetPolls)
+		group.PUT("/update", middleware.AuthMiddleware(), h.UpdateVote)
 	}
+
+	register(r.Group("/polls"))
+	register(r.Group("/vote"))
 }
 
 func (h *voteHandler) CreateVote(c *gin.Context) {
@@ -50,13 +54,24 @@ func (h *voteHandler) CreateVote(c *gin.Context) {
 
 	var req CreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.SendResponse(c, http.StatusBadRequest, "success", "invalid request", nil)
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request", nil)
+		return
+	}
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	createdByID, err := utils.ParseSnowflakeID(claims.UserID)
+	if err != nil {
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid created_by_id", nil)
 		return
 	}
 
 	vote := &CreateVoteInMogo{
 		Title:       req.Vote.Title,
-		CreatedByID: req.Vote.CreatedByID,
+		CreatedByID: createdByID,
 		Status:      "created",
 		IsDeleted:   false,
 		CreatedAt:   time.Now().Unix(),
@@ -127,7 +142,13 @@ func (h *voteHandler) GetVotesByCreatorID(c *gin.Context) {
 	ctx, cancle := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancle()
 
-	creatorID := c.Param("userID")
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	creatorID := claims.UserID
 	votes, err := h.service.GetVotesByCreatorID(ctx, creatorID, 0, 10)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get votes", nil)
@@ -153,25 +174,24 @@ func (h *voteHandler) UpdateVote(c *gin.Context) {
 	ctx, cancle := context.WithTimeout(c.Request.Context(), 3*time.Second)
 	defer cancle()
 
-	var req VoteRequest
+	var req CastVoteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request", nil)
 		return
 	}
 
-	switch req.Delta {
-	case 1:
-		if err := h.service.AddVote(ctx, req.ID, req.OptionID); err != nil {
-			response.SendResponse(c, http.StatusInternalServerError, "error", "failed to add vote", nil)
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	if err := h.service.AddVote(ctx, claims.UserID, req.ID, req.OptionID, req.Count); err != nil {
+		if err == ErrVoteLimitReached {
+			response.SendResponse(c, http.StatusTooManyRequests, "error", "vote limit reached", nil)
 			return
 		}
-	case -1:
-		if err := h.service.RemoveVote(ctx, req.ID, req.OptionID); err != nil {
-			response.SendResponse(c, http.StatusInternalServerError, "error", "failed to remove vote", nil)
-			return
-		}
-	default:
-		response.SendResponse(c, http.StatusBadRequest, "error", "invalid delta value", nil)
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to add vote", nil)
 		return
 	}
 
@@ -196,25 +216,4 @@ func (h *voteHandler) EditTitle(c *gin.Context) {
 	}
 
 	response.SendResponse(c, http.StatusOK, "success", "title edited successfully", nil)
-}
-
-func (h *voteHandler) GetFromIDs(c *gin.Context) {
-	ctx, cancle := context.WithTimeout(c.Request.Context(), 5*time.Second)
-	defer cancle()
-
-	var req struct {
-		IDs []string `json:"ids" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request", nil)
-		return
-	}
-
-	votes, err := h.service.GetFromIDs(ctx, req.IDs)
-	if err != nil {
-		response.SendResponse(c, http.StatusInternalServerError, "error", "something went wrong", nil)
-		return
-	}
-
-	response.SendResponse(c, http.StatusOK, "success", "successfully fetch polls from ids", votes)
 }
