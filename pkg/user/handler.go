@@ -84,6 +84,7 @@ func (h *userHandler) createUser(c *gin.Context) {
 	}
 
 	h.bloom.Add(req.Username)
+	user.Password = ""
 	response.SendResponse(c, http.StatusOK, "success", "user created successfully", user)
 }
 
@@ -100,8 +101,9 @@ func (h *userHandler) getUserByEmail(c *gin.Context) {
 
 	if user == nil {
 		response.SendResponse(c, http.StatusNotFound, "error", "user not found", nil)
+		return
 	}
-
+	user.Password = ""
 	response.SendResponse(c, http.StatusOK, "success", "user found", user)
 }
 
@@ -124,8 +126,10 @@ func (h *userHandler) getUserByID(c *gin.Context) {
 
 	if user == nil {
 		response.SendResponse(c, http.StatusNotFound, "error", "user not found", nil)
+		return
 	}
 
+	user.Password = ""
 	response.SendResponse(c, http.StatusOK, "success", "user found", user)
 }
 func (h *userHandler) updateUser(c *gin.Context) {

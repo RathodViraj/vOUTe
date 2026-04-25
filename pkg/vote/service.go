@@ -15,8 +15,8 @@ type VoteService interface {
 	AddVote(ctx context.Context, userID, voteID, optionID string, count int64) error
 	CloseVote(ctx context.Context, voteID string) error
 	EditTitle(ctx context.Context, voteID, newTitle string) error
-	GetHistoricData(ctx context.Context, voteID string) (*HistoricDataResponse, error)
 	GetFromIDs(ctx context.Context, voteIDs []string) ([]Vote, error)
+	GetHistoricData(ctx context.Context, voteIDs []string) (*[]HistoricDataResponse, error)
 }
 
 type voteService struct {
@@ -117,8 +117,17 @@ func (s *voteService) EditTitle(ctx context.Context, voteID, newTitle string) er
 	return s.repo.EditTitle(ctx, voteID, newTitle)
 }
 
-func (s *voteService) GetHistoricData(ctx context.Context, voteID string) (*HistoricDataResponse, error) {
-	return s.repo.GetHistoricData(ctx, voteID)
+func (s *voteService) GetHistoricData(ctx context.Context, voteIDs []string) (*[]HistoricDataResponse, error) {
+	var result []HistoricDataResponse
+
+	for _, voteID := range voteIDs {
+		data, err := s.repo.GetHistoricData(ctx, voteID)
+		if err == nil {
+			result = append(result, *data)
+		}
+	}
+
+	return &result, nil
 }
 
 func (s *voteService) GetFromIDs(ctx context.Context, voteIDs []string) ([]Vote, error) {

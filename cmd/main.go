@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"voute/db"
 	"voute/pkg/bloom"
 	"voute/pkg/bookmarks"
 	"voute/pkg/comments"
+	"voute/pkg/mailing"
+	"voute/pkg/middleware"
 	"voute/pkg/user"
 	"voute/pkg/vote"
 	"voute/pkg/ws"
@@ -53,6 +56,28 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	middleware.AddDBInMiddleware(mongoClinet.Database("voute"), "users")
+	r.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(204)
+			return
+		}
+		c.Next()
+	})
+
+	r.POST("/auth/login", middleware.Login)
+	r.POST("/auth/refresh", middleware.RefershToken)
+	r.POST("/auth/logout", middleware.Logout)
+	r.POST("/auth/reset-password", middleware.ResetPassword)
+
+	mailRepo := mailing.NewMailingRepository(redisClient, mongoClinet.Database("voute"), "users")
+	mailSvc := mailing.NewEmailService(mailRepo)
+	mailHandler := mailing.NewMailingHandler(mailSvc)
+	mailHandler.RegisterRoutes(r)
 
 	userRepo := user.NewUserRepository(mongoClinet.Database("voute"))
 	userSvc := user.NewUserService(userRepo)

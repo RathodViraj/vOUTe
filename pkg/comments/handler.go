@@ -53,11 +53,6 @@ func (h *commentHandler) CreateComment(c *gin.Context) {
 		return
 	}
 
-	userID, err := utils.ParseSnowflakeID(claims.UserID)
-	if err != nil {
-		response.SendResponse(c, http.StatusBadRequest, "error", "invalid user id", nil)
-		return
-	}
 	voteID, err := utils.ParseSnowflakeID(req.VoteID)
 	if err != nil {
 		response.SendResponse(c, http.StatusBadRequest, "error", "invalid vote id", nil)
@@ -65,7 +60,7 @@ func (h *commentHandler) CreateComment(c *gin.Context) {
 	}
 	comment := &Comment{
 		ID:        utils.GenerateSnowflakeID(),
-		UserID:    userID,
+		Username:  req.Username,
 		VoteID:    voteID,
 		Content:   req.Content,
 		CreatedAt: time.Now().Unix(),
@@ -75,7 +70,7 @@ func (h *commentHandler) CreateComment(c *gin.Context) {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to create comment", nil)
 		return
 	}
-	response.SendResponse(c, http.StatusOK, "success", "comment created successfully", nil)
+	response.SendResponse(c, http.StatusOK, "success", "comment created successfully", comment)
 }
 
 func (h *commentHandler) GetCommentsByVoteID(c *gin.Context) {

@@ -22,14 +22,14 @@ func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenStr := extractBearer(c)
 		if tokenStr == "" {
-			response.SendResponse(c, http.StatusUnauthorized, "error", "refersh token required", nil)
+			response.SendResponse(c, http.StatusUnauthorized, "error", "access token required", nil)
 			c.Abort()
 			return
 		}
 
-		claims, err := ParseRefershToken(tokenStr)
+		claims, err := ParseAccessToken(tokenStr)
 		if err != nil {
-			response.SendResponse(c, http.StatusUnauthorized, "error", "invalid or expried refersh token", nil)
+			response.SendResponse(c, http.StatusUnauthorized, "error", "invalid or expired access token", nil)
 			c.Abort()
 			return
 		}

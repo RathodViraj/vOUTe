@@ -85,3 +85,24 @@ func (d *MiddleWareDB) FetchUserByEmail(ctx context.Context, email string) (int6
 
 	return u.ID, u.Username, u.Password, u.Role, nil
 }
+
+func (d *MiddleWareDB) ResetPassword(ctx context.Context, email, newPassword string) error {
+	filter := bson.M{
+		"email":      email,
+		"is_deleted": false,
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"password": newPassword,
+		},
+	}
+
+	opts := options.Update().SetUpsert(true)
+	_, err := d.mongoDatabase.Collection(d.userCollectioName).UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

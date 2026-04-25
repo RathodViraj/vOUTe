@@ -102,6 +102,26 @@ func generateTokePair(userID, userName, role string) (*TokenPair, error) {
 	}, nil
 }
 
+func ParseAccessToken(tokenStr string) (*Claims, error) {
+	token, err := jwt.ParseWithClaims(
+		tokenStr,
+		&Claims{},
+		func(t *jwt.Token) (any, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return accessSecret, nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
+		return claims, nil
+	}
+	return nil, jwt.ErrInvalidKey
+}
+
 func ParseRefershToken(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(
 		tokenStr,
@@ -137,12 +157,12 @@ func Login(c *gin.Context) {
 		pair, err = LoginWithUsername(ctx, req)
 
 	} else if c.Query("type") == "email" {
-		var req LoginWithUsernameRequest
+		var req LoginWithEmailRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			response.SendResponse(c, http.StatusBadRequest, "error", "invalid request body", nil)
 			return
 		}
-		pair, err = LoginWithUsername(ctx, req)
+		pair, err = LoginWithEmail(ctx, req)
 	} else {
 		response.SendResponse(c, http.StatusBadRequest, "error", "invalid login request type", nil)
 		return
@@ -157,8 +177,8 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	c.SetCookie("refersh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", true, true)
-	response.SendResponse(c, http.StatusOK, "success", "loged in successfully", nil)
+	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", true, true)
+	response.SendResponse(c, http.StatusOK, "success", "loged in successfully", pair)
 }
 
 func LoginWithUsername(ctx context.Context, req LoginWithUsernameRequest) (*TokenPair, error) {
@@ -198,7 +218,10 @@ func LoginWithEmail(ctx context.Context, req LoginWithEmailRequest) (*TokenPair,
 }
 
 func RefershToken(c *gin.Context) {
-	tokenStr, err := c.Cookie("refersh_token")
+	tokenStr, err := c.Cookie("refresh_token")
+	if err != nil {
+		tokenStr, _ = c.Cookie("refersh_token")
+	}
 	if err != nil {
 		tokenStr = extractBearer(c)
 	}
@@ -222,7 +245,7 @@ func RefershToken(c *gin.Context) {
 	}
 
 	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", true, true)
-	response.SendResponse(c, http.StatusOK, "success", "token refreshed", nil)
+	response.SendResponse(c, http.StatusOK, "success", "token refreshed", pair)
 }
 
 func extractBearer(c *gin.Context) string {
@@ -236,4 +259,28 @@ func extractBearer(c *gin.Context) string {
 		return ""
 	}
 	return strings.TrimSpace(parts[1])
+}
+
+func Logout(c *gin.Context) {
+	c.SetCookie("refresh_token", "", -1, "/", "", true, true)
+	c.SetCookie("refersh_token", "", -1, "/", "", true, true)
+	response.SendResponse(c, http.StatusOK, "success", "logged out successfully", nil)
+}
+
+func ResetPassword(c *gin.Context) {
+	var req struct {
+		Email       string `json:"email" binding:"required,email"`
+		NewPassword string `json:"new_password" binding:"required,min=6"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request body", nil)
+		return
+	}
+
+	if err := db.ResetPassword(c.Request.Context(), req.Email, req.NewPassword); err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to reset password", nil)
+		return
+	}
+
+	response.SendResponse(c, http.StatusOK, "success", "password reset successfully", nil)
 }

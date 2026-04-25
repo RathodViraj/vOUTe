@@ -20,6 +20,7 @@ type VoteHandler interface {
 	UpdateVote(c *gin.Context)
 	EditTitle(c *gin.Context)
 	GetPolls(c *gin.Context)
+	HistoricData(c *gin.Context)
 	AddVoteRoutes(r *gin.Engine)
 }
 
@@ -42,6 +43,7 @@ func (h *voteHandler) AddVoteRoutes(r *gin.Engine) {
 		group.PUT("/editTitle", h.EditTitle)
 		group.GET("", h.GetPolls)
 		group.PUT("/update", middleware.AuthMiddleware(), h.UpdateVote)
+		group.GET("/getHistoricData", h.HistoricData)
 	}
 
 	register(r.Group("/polls"))
@@ -87,6 +89,8 @@ func (h *voteHandler) CreateVote(c *gin.Context) {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to create vote", nil)
 		return
 	}
+
+	response.SendResponse(c, http.StatusCreated, "success", "vote created successfully", nil)
 }
 
 func (h *voteHandler) GetVoteByID(c *gin.Context) {
@@ -216,4 +220,24 @@ func (h *voteHandler) EditTitle(c *gin.Context) {
 	}
 
 	response.SendResponse(c, http.StatusOK, "success", "title edited successfully", nil)
+}
+
+func (h *voteHandler) HistoricData(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	var req struct {
+		IDS []string `json:"ids" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request", nil)
+		return
+	}
+	data, err := h.service.GetHistoricData(ctx, req.IDS)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get historic data", nil)
+		return
+	}
+	response.SendResponse(c, http.StatusOK, "success", "historic data retrieved successfully", data)
 }
