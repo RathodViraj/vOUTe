@@ -56,6 +56,10 @@ var (
 	refershTTL = 7 * 24 * time.Hour
 )
 
+func useSecureCookies() bool {
+	return strings.EqualFold(utils.GetEnv("COOKIE_SECURE", ""), "true")
+}
+
 func generateTokePair(userID, userName, role string) (*TokenPair, error) {
 	now := time.Now()
 
@@ -177,7 +181,8 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", true, true)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", useSecureCookies(), true)
 	response.SendResponse(c, http.StatusOK, "success", "loged in successfully", pair)
 }
 
@@ -244,7 +249,8 @@ func RefershToken(c *gin.Context) {
 		return
 	}
 
-	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", true, true)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", useSecureCookies(), true)
 	response.SendResponse(c, http.StatusOK, "success", "token refreshed", pair)
 }
 
@@ -262,8 +268,9 @@ func extractBearer(c *gin.Context) string {
 }
 
 func Logout(c *gin.Context) {
-	c.SetCookie("refresh_token", "", -1, "/", "", true, true)
-	c.SetCookie("refersh_token", "", -1, "/", "", true, true)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("refresh_token", "", -1, "/", "", useSecureCookies(), true)
+	c.SetCookie("refersh_token", "", -1, "/", "", useSecureCookies(), true)
 	response.SendResponse(c, http.StatusOK, "success", "logged out successfully", nil)
 }
 

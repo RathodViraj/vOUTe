@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, Navigate, useNavigate } from 'react-router';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -8,23 +8,31 @@ import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 
 export function LoginPage() {
-  const [email, setEmail] = useState('');
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const { login } = useAuth();
+  const { login, isAuthenticated, isLoadingAuth } = useAuth();
   const navigate = useNavigate();
+
+  if (isLoadingAuth) {
+    return null;
+  }
+
+  if (isAuthenticated) {
+    return <Navigate to="/home" replace />;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!email || !password) {
+    if (!identifier || !password) {
       toast.error('Please fill in all fields');
       return;
     }
 
     setIsLoading(true);
     try {
-      await login(email, password);
+      await login(identifier, password);
       toast.success('Welcome back!');
       navigate('/home');
     } catch (error) {
@@ -54,8 +62,8 @@ export function LoginPage() {
               id="email"
               type="text"
               placeholder="Enter your email or username"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
               disabled={isLoading}
             />
           </div>

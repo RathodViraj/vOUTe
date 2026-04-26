@@ -1,19 +1,62 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Separator } from '../components/ui/separator';
 import { ArrowLeft } from 'lucide-react';
-import { mockPolls, mockComments } from '../lib/mockData';
 import { formatDistanceToNow } from 'date-fns';
 import { Badge } from '../components/ui/badge';
+import { createComment, getComments, getPollById } from '../lib/api';
+import type { Comment, Poll } from '../lib/types';
+import { useAuth } from '../contexts/AuthContext';
+import { Input } from '../components/ui/input';
+import { toast } from 'sonner';
 
 export function CommentsPage() {
   const { pollId } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const [poll, setPoll] = useState<Poll | null>(null);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [content, setContent] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const poll = mockPolls.find(p => p.id === pollId);
-  const comments = mockComments.filter(c => c.pollId === pollId);
+  useEffect(() => {
+    if (!pollId) return;
+    const load = async () => {
+      try {
+        const [pollData, commentsData] = await Promise.all([
+          getPollById(pollId),
+          getComments(pollId),
+        ]);
+        setPoll(pollData);
+        setComments(commentsData);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to load comments');
+      }
+    };
+
+    load();
+  }, [pollId]);
+
+  const handleCreateComment = async () => {
+    if (!pollId || !user) return;
+    if (!content.trim()) {
+      toast.error('Please enter a comment');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const newComment = await createComment(pollId, user.username, content.trim());
+      setComments((prev) => [newComment, ...prev]);
+      setContent('');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to create comment');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   if (!poll) {
     return (
@@ -94,6 +137,22 @@ export function CommentsPage() {
               Comments ({comments.length})
             </h3>
           </div>
+
+          <Card className="p-4 space-y-3">
+            <Input
+              placeholder="Write a comment..."
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              disabled={isSubmitting}
+            />
+            <Button
+              onClick={handleCreateComment}
+              className="bg-indigo-600 hover:bg-indigo-700"
+              disabled={isSubmitting || !user}
+            >
+              {isSubmitting ? 'Posting...' : 'Post Comment'}
+            </Button>
+          </Card>
 
           {comments.length === 0 ? (
             <Card className="p-12 text-center">

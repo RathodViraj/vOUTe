@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Outlet, Link, useLocation } from 'react-router';
+import React, { useEffect, useState } from 'react';
+import { Outlet, Link, Navigate, useLocation } from 'react-router';
 import { Button } from '../components/ui/button';
 import { Moon, Sun, User, Plus } from 'lucide-react';
 import { useTheme } from 'next-themes';
@@ -7,14 +7,40 @@ import { cn } from '../components/ui/utils';
 import { VoteBalanceIndicator } from '../components/VoteBalanceIndicator';
 import { CreatePollDialog } from '../components/CreatePollDialog';
 import { usePolls } from '../contexts/PollsContext';
+import { useAuth } from '../contexts/AuthContext';
+import { getRemainingVotes } from '../lib/api';
 
 export function AppLayout() {
   const { theme, setTheme } = useTheme();
   const location = useLocation();
-  const [availableVotes, setAvailableVotes] = useState(18);
+  const [availableVotes, setAvailableVotes] = useState(24);
   const maxVotes = 24;
   const [isCreatePollOpen, setIsCreatePollOpen] = useState(false);
   const { createPoll } = usePolls();
+  const { isAuthenticated, isLoadingAuth } = useAuth();
+
+  useEffect(() => {
+    const loadRemainingVotes = async () => {
+      try {
+        const remaining = await getRemainingVotes();
+        setAvailableVotes(remaining);
+      } catch {
+        setAvailableVotes(24);
+      }
+    };
+
+    if (isAuthenticated) {
+      loadRemainingVotes();
+    }
+  }, [isAuthenticated]);
+
+  if (isLoadingAuth) {
+    return null;
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
 
   const navItems = [
     { name: 'Home', path: '/home' },
@@ -23,8 +49,8 @@ export function AppLayout() {
     { name: 'Bookmarks', path: '/bookmarks' },
   ];
 
-  const handleCreatePoll = (title: string, options: string[]) => {
-    createPoll(title, options);
+  const handleCreatePoll = async (title: string, options: string[]) => {
+    await createPoll(title, options);
   };
 
   return (

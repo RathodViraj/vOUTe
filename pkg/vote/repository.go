@@ -213,6 +213,7 @@ func (r *voteRepo) GetVotesByCreatorID(ctx context.Context, creatorID string, sk
 	options := options.Find()
 	options.SetSkip(int64(skip))
 	options.SetLimit(int64(take))
+	options.SetSort(bson.D{{Key: "created_at", Value: -1}})
 
 	cursor, err := r.mongoDB.Collection(r.voteCollection).Find(ctx, filter, options)
 	if err != nil {
@@ -261,6 +262,7 @@ func (r *voteRepo) ListVote(ctx context.Context, skip, take int) ([]*Vote, error
 	options := options.Find()
 	options.SetSkip(int64(skip))
 	options.SetLimit(int64(take))
+	options.SetSort(bson.D{{Key: "created_at", Value: -1}})
 
 	cursor, err := r.mongoDB.Collection(r.voteCollection).Find(ctx, filter, options)
 	if err != nil {
@@ -308,6 +310,7 @@ func (r *voteRepo) ListLiveVote(ctx context.Context, skip, take int) ([]*Vote, e
 	options := options.Find()
 	options.SetSkip(int64(skip))
 	options.SetLimit(int64(take))
+	options.SetSort(bson.D{{Key: "created_at", Value: -1}})
 
 	cursor, err := r.mongoDB.Collection(r.voteCollection).Find(ctx, filter, options)
 	if err != nil {
@@ -419,7 +422,11 @@ func (r *voteRepo) AddVote(ctx context.Context, userID, voteID, optionID string,
 		return err
 	}
 
-	return r.saveSnapshot(ctx, parsedVoteID)
+	// Vote mutation is already committed in Redis at this point.
+	// Snapshot persistence should not fail the request, otherwise clients can
+	// see a successful live count update but receive an API error.
+	_ = r.saveSnapshot(ctx, parsedVoteID)
+	return nil
 }
 func (r *voteRepo) saveSnapshot(ctx context.Context, voteID int64) error {
 	voteCount, err := r.getVoteCount(ctx, voteID)
@@ -481,11 +488,44 @@ func (r *voteRepo) GetRemainingVotes(ctx context.Context, userID string) (int64,
 	if err != nil {
 		return 0, err
 	}
-	val, err := r.rdb.HGet(ctx, userBucketKey(parsedUserID), "remaining").Int64()
-	if err == redis.Nil {
+
+	bucketKey := userBucketKey(parsedUserID)
+	data, err := r.rdb.HGetAll(ctx, bucketKey).Result()
+	if err != nil {
+		return 0, err
+	}
+	if len(data) == 0 {
 		return maxVotes, nil // never voted — full bucket
 	}
-	return val, err
+
+	remaining, err := strconv.ParseInt(data["remaining"], 10, 64)
+	if err != nil {
+		remaining = maxVotes
+	}
+	lastRefill, err := strconv.ParseInt(data["last_refill"], 10, 64)
+	if err != nil {
+		lastRefill = time.Now().Unix()
+	}
+
+	elapsed := time.Now().Unix() - lastRefill
+	if elapsed > 0 {
+		tokensToAdd := elapsed / refillRatePerSec
+		if tokensToAdd > 0 {
+			remaining += tokensToAdd
+			if remaining > maxVotes {
+				remaining = maxVotes
+			}
+			lastRefill = lastRefill + (tokensToAdd * refillRatePerSec)
+
+			_, _ = r.rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.HSet(ctx, bucketKey, "remaining", remaining, "last_refill", lastRefill)
+				pipe.Expire(ctx, bucketKey, 48*time.Hour)
+				return nil
+			})
+		}
+	}
+
+	return remaining, nil
 }
 
 func (r *voteRepo) PopDirtyPolls(ctx context.Context) ([]string, error) {
@@ -565,9 +605,13 @@ func (r *voteRepo) GetHistoricData(ctx context.Context, voteID string) (*Histori
 		ORDER BY bucket;
  	`
 
-	interval := r.getIntervalForBucketCount(time.Now().Unix())
 	end := time.Now().UTC()
-	start := end.Add(-7 * 24 * time.Hour)
+	start := end.Add(-24 * time.Hour)
+
+	// Keep chart granularity readable and stable for the "Last 24h" UI.
+	// 48 buckets -> one point every 30 minutes.
+	const targetBuckets = 48
+	interval := int((24 * 60) / targetBuckets)
 	res, err := r.timescaleDB.QueryContext(ctx, query, interval, parsedID, start, end)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -583,15 +627,14 @@ func (r *voteRepo) GetHistoricData(ctx context.Context, voteID string) (*Histori
 	}
 
 	for res.Next() {
-		var op_data HistoricOptionsData
-		if err := res.Scan(&op_data.Timestamp, &op_data.OptionID, &op_data.VoteCount); err != nil {
-			response.OptionsData = append(response.OptionsData, HistoricOptionsData{
-				Timestamp: time.Time{},
-			})
+		var opData HistoricOptionsData
+		var optionID int64
+		if err := res.Scan(&opData.Timestamp, &optionID, &opData.VoteCount); err != nil {
 			continue
 		}
+		opData.OptionID = strconv.FormatInt(optionID, 10)
 
-		response.OptionsData = append(response.OptionsData, op_data)
+		response.OptionsData = append(response.OptionsData, opData)
 	}
 
 	return response, nil

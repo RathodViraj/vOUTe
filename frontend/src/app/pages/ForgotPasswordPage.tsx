@@ -4,16 +4,15 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card } from '../components/ui/card';
-import { InputOTP, InputOTPGroup, InputOTPSlot } from '../components/ui/input-otp';
 import { toast } from 'sonner';
 import { ArrowLeft } from 'lucide-react';
+import { resetPassword } from '../lib/api';
 
-type ForgotPasswordStep = 'email' | 'otp' | 'reset';
+type ForgotPasswordStep = 'email' | 'reset';
 
 export function ForgotPasswordPage() {
   const [step, setStep] = useState<ForgotPasswordStep>('email');
   const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const navigate = useNavigate();
@@ -26,23 +25,10 @@ export function ForgotPasswordPage() {
       return;
     }
 
-    toast.success('Verification code sent to your email!');
-    setStep('otp');
-  };
-
-  const handleOtpSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (otp.length !== 6) {
-      toast.error('Please enter the 6-digit code');
-      return;
-    }
-
-    toast.success('Code verified!');
     setStep('reset');
   };
 
-  const handleResetSubmit = (e: React.FormEvent) => {
+  const handleResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!newPassword || !confirmPassword) {
@@ -60,8 +46,13 @@ export function ForgotPasswordPage() {
       return;
     }
 
-    toast.success('Password reset successfully!');
-    navigate('/login');
+    try {
+      await resetPassword(email, newPassword);
+      toast.success('Password reset successfully!');
+      navigate('/login');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to reset password');
+    }
   };
 
   return (
@@ -85,7 +76,6 @@ export function ForgotPasswordPage() {
           </h1>
           <p className="text-muted-foreground">
             {step === 'email' && 'Enter your email to receive a verification code'}
-            {step === 'otp' && 'Enter the verification code'}
             {step === 'reset' && 'Create a new password'}
           </p>
         </div>
@@ -106,40 +96,6 @@ export function ForgotPasswordPage() {
             <Button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700">
               Send Verification Code
             </Button>
-          </form>
-        )}
-
-        {step === 'otp' && (
-          <form onSubmit={handleOtpSubmit} className="space-y-6">
-            <div className="text-center space-y-2">
-              <p className="text-sm text-muted-foreground">
-                We've sent a verification code to
-              </p>
-              <p className="font-medium">{email}</p>
-            </div>
-
-            <div className="flex justify-center">
-              <InputOTP maxLength={6} value={otp} onChange={setOtp}>
-                <InputOTPGroup>
-                  <InputOTPSlot index={0} />
-                  <InputOTPSlot index={1} />
-                  <InputOTPSlot index={2} />
-                  <InputOTPSlot index={3} />
-                  <InputOTPSlot index={4} />
-                  <InputOTPSlot index={5} />
-                </InputOTPGroup>
-              </InputOTP>
-            </div>
-
-            <Button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700">
-              Verify Code
-            </Button>
-
-            <div className="text-center">
-              <Button variant="link" className="text-indigo-600" type="button">
-                Resend code
-              </Button>
-            </div>
           </form>
         )}
 

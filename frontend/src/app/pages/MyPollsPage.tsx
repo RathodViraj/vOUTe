@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -20,11 +20,19 @@ import {
 } from '../components/ui/alert-dialog';
 
 export function MyPollsPage() {
-  const { userPolls, closePoll } = usePolls();
+  const { userPolls, closePoll, refreshMyPolls } = usePolls();
 
-  const handleClosePoll = (pollId: string) => {
-    closePoll(pollId);
-    toast.success('Poll closed successfully');
+  useEffect(() => {
+    refreshMyPolls();
+  }, [refreshMyPolls]);
+
+  const handleClosePoll = async (pollId: string) => {
+    try {
+      await closePoll(pollId);
+      toast.success('Poll closed successfully');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to close poll');
+    }
   };
 
   return (

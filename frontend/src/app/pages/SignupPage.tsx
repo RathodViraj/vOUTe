@@ -1,28 +1,35 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, Navigate, useNavigate } from 'react-router';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card } from '../components/ui/card';
-import { InputOTP, InputOTPGroup, InputOTPSlot } from '../components/ui/input-otp';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 import { CheckCircle2, XCircle } from 'lucide-react';
+import { checkUsernameAvailability as checkUsernameAvailabilityRequest } from '../lib/api';
 
-type SignupStep = 'credentials' | 'otp' | 'username';
+type SignupStep = 'credentials' | 'username';
 
 export function SignupPage() {
   const [step, setStep] = useState<SignupStep>('credentials');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [otp, setOtp] = useState('');
   const [username, setUsername] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isCheckingUsername, setIsCheckingUsername] = useState(false);
   const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
-  const { signup } = useAuth();
+  const { signup, isAuthenticated, isLoadingAuth } = useAuth();
   const navigate = useNavigate();
+
+  if (isLoadingAuth) {
+    return null;
+  }
+
+  if (isAuthenticated) {
+    return <Navigate to="/home" replace />;
+  }
 
   const handleCredentialsSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,19 +49,6 @@ export function SignupPage() {
       return;
     }
 
-    toast.success('Verification code sent to your email!');
-    setStep('otp');
-  };
-
-  const handleOtpSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (otp.length !== 6) {
-      toast.error('Please enter the 6-digit code');
-      return;
-    }
-
-    toast.success('Code verified!');
     setStep('username');
   };
 
@@ -83,25 +77,28 @@ export function SignupPage() {
     }
   };
 
-  const checkUsernameAvailability = async (value: string) => {
+  const validateUsernameAvailability = async (value: string) => {
     if (value.length < 3) {
       setUsernameAvailable(null);
       return;
     }
 
     setIsCheckingUsername(true);
-    // Mock API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    // Random availability for demo
-    const available = Math.random() > 0.3;
-    setUsernameAvailable(available);
-    setIsCheckingUsername(false);
+    try {
+      const available = await checkUsernameAvailabilityRequest(value);
+      setUsernameAvailable(available);
+    } catch {
+      setUsernameAvailable(null);
+      toast.error('Unable to check username right now');
+    } finally {
+      setIsCheckingUsername(false);
+    }
   };
 
   const handleUsernameChange = (value: string) => {
     setUsername(value);
     setUsernameAvailable(null);
-    checkUsernameAvailability(value);
+    validateUsernameAvailability(value);
   };
 
   return (
@@ -119,7 +116,6 @@ export function SignupPage() {
           {/* Progress indicator */}
           <div className="flex items-center justify-center gap-2 mt-6">
             <div className={`h-2 w-16 rounded-full ${step === 'credentials' ? 'bg-indigo-600' : 'bg-indigo-600'}`} />
-            <div className={`h-2 w-16 rounded-full ${step === 'otp' ? 'bg-indigo-600' : step === 'username' ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'}`} />
             <div className={`h-2 w-16 rounded-full ${step === 'username' ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'}`} />
           </div>
         </div>
@@ -162,40 +158,6 @@ export function SignupPage() {
             <Button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700">
               Continue
             </Button>
-          </form>
-        )}
-
-        {step === 'otp' && (
-          <form onSubmit={handleOtpSubmit} className="space-y-6">
-            <div className="text-center space-y-2">
-              <p className="text-sm text-muted-foreground">
-                We've sent a verification code to
-              </p>
-              <p className="font-medium">{email}</p>
-            </div>
-
-            <div className="flex justify-center">
-              <InputOTP maxLength={6} value={otp} onChange={setOtp}>
-                <InputOTPGroup>
-                  <InputOTPSlot index={0} />
-                  <InputOTPSlot index={1} />
-                  <InputOTPSlot index={2} />
-                  <InputOTPSlot index={3} />
-                  <InputOTPSlot index={4} />
-                  <InputOTPSlot index={5} />
-                </InputOTPGroup>
-              </InputOTP>
-            </div>
-
-            <Button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700">
-              Verify Code
-            </Button>
-
-            <div className="text-center">
-              <Button variant="link" className="text-indigo-600" type="button">
-                Resend code
-              </Button>
-            </div>
           </form>
         )}
 

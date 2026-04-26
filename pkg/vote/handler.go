@@ -16,6 +16,8 @@ type VoteHandler interface {
 	CreateVote(c *gin.Context)
 	GetVoteByID(c *gin.Context)
 	GetVotesByCreatorID(c *gin.Context)
+	GetUserVotedPolls(c *gin.Context)
+	GetRemainingVotes(c *gin.Context)
 	CloseVote(c *gin.Context)
 	UpdateVote(c *gin.Context)
 	EditTitle(c *gin.Context)
@@ -37,13 +39,15 @@ func NewVoteHandler(service VoteService) VoteHandler {
 func (h *voteHandler) AddVoteRoutes(r *gin.Engine) {
 	register := func(group *gin.RouterGroup) {
 		group.POST("/create", middleware.AuthMiddleware(), h.CreateVote)
-		group.GET("/:voteID", h.GetVoteByID)
 		group.GET("/creator", middleware.AuthMiddleware(), h.GetVotesByCreatorID)
+		group.GET("/voted", middleware.AuthMiddleware(), h.GetUserVotedPolls)
+		group.GET("/remaining", middleware.AuthMiddleware(), h.GetRemainingVotes)
+		group.GET("/:voteID", h.GetVoteByID)
 		group.PATCH("/:voteID", h.CloseVote)
 		group.PUT("/editTitle", h.EditTitle)
 		group.GET("", h.GetPolls)
 		group.PUT("/update", middleware.AuthMiddleware(), h.UpdateVote)
-		group.GET("/getHistoricData", h.HistoricData)
+		group.POST("/getHistoricData", h.HistoricData)
 	}
 
 	register(r.Group("/polls"))
@@ -160,6 +164,50 @@ func (h *voteHandler) GetVotesByCreatorID(c *gin.Context) {
 	}
 
 	response.SendResponse(c, http.StatusOK, "success", "votes retrieved successfully", votes)
+}
+
+func (h *voteHandler) GetUserVotedPolls(c *gin.Context) {
+	ctx, cancle := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancle()
+
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	votedIDs, err := h.service.GetUserVotedPolls(ctx, claims.UserID)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get voted polls", nil)
+		return
+	}
+
+	votes, err := h.service.GetFromIDs(ctx, votedIDs)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get voted polls", nil)
+		return
+	}
+
+	response.SendResponse(c, http.StatusOK, "success", "voted polls retrieved successfully", votes)
+}
+
+func (h *voteHandler) GetRemainingVotes(c *gin.Context) {
+	ctx, cancle := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancle()
+
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	remaining, err := h.service.GetRemainingVotes(ctx, claims.UserID)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get remaining votes", nil)
+		return
+	}
+
+	response.SendResponse(c, http.StatusOK, "success", "remaining votes retrieved successfully", gin.H{"remaining_votes": remaining})
 }
 
 func (h *voteHandler) CloseVote(c *gin.Context) {

@@ -1,10 +1,12 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
-import { Poll } from '../lib/mockData';
+import React, { createContext, useCallback, useContext, useState, ReactNode } from 'react';
+import { closePoll as closePollRequest, createPoll as createPollRequest, getMyPolls } from '../lib/api';
+import type { Poll } from '../lib/types';
 
 interface PollsContextType {
   userPolls: Poll[];
-  createPoll: (title: string, options: string[]) => void;
-  closePoll: (pollId: string) => void;
+  createPoll: (title: string, options: string[]) => Promise<void>;
+  closePoll: (pollId: string) => Promise<void>;
+  refreshMyPolls: () => Promise<void>;
 }
 
 const PollsContext = createContext<PollsContextType | undefined>(undefined);
@@ -12,30 +14,20 @@ const PollsContext = createContext<PollsContextType | undefined>(undefined);
 export function PollsProvider({ children }: { children: ReactNode }) {
   const [userPolls, setUserPolls] = useState<Poll[]>([]);
 
-  const createPoll = (title: string, options: string[]) => {
-    const newPoll: Poll = {
-      id: `user-poll-${Date.now()}`,
-      title,
-      options: options.map((text, index) => ({
-        id: `option-${index}`,
-        text,
-        votes: 0,
-      })),
-      createdAt: new Date(),
-      isLive: true,
-      history: [],
-    };
+  const refreshMyPolls = useCallback(async () => {
+    const polls = await getMyPolls();
+    setUserPolls(polls);
+  }, []);
 
-    setUserPolls(prev => [newPoll, ...prev]);
-  };
+  const createPoll = useCallback(async (title: string, options: string[]) => {
+    await createPollRequest(title, options);
+    await refreshMyPolls();
+  }, [refreshMyPolls]);
 
-  const closePoll = (pollId: string) => {
-    setUserPolls(prev =>
-      prev.map(poll =>
-        poll.id === pollId ? { ...poll, isLive: false } : poll
-      )
-    );
-  };
+  const closePoll = useCallback(async (pollId: string) => {
+    await closePollRequest(pollId);
+    await refreshMyPolls();
+  }, [refreshMyPolls]);
 
   return (
     <PollsContext.Provider
@@ -43,6 +35,7 @@ export function PollsProvider({ children }: { children: ReactNode }) {
         userPolls,
         createPoll,
         closePoll,
+        refreshMyPolls,
       }}
     >
       {children}

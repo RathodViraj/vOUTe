@@ -1,35 +1,60 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { toast } from 'sonner';
-
-interface User {
-  id: string;
-  username: string;
-  email: string;
-}
+import {
+  getCurrentUser,
+  hasAccessToken,
+  login as loginRequest,
+  logout as logoutRequest,
+  refreshAccessToken,
+  signup as signupRequest,
+} from '../lib/api';
+import type { User } from '../lib/types';
 
 interface AuthContextType {
   user: User | null;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, username: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isAuthenticated: boolean;
+  isLoadingAuth: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+
+  useEffect(() => {
+    const bootstrapAuth = async () => {
+      try {
+        if (!hasAccessToken()) {
+          await refreshAccessToken();
+        }
+
+        const me = await getCurrentUser();
+        setUser(me);
+      } catch {
+        try {
+          await refreshAccessToken();
+          const me = await getCurrentUser();
+          setUser(me);
+        } catch {
+          setUser(null);
+        }
+      } finally {
+        setIsLoadingAuth(false);
+      }
+    };
+
+    bootstrapAuth();
+  }, []);
 
   const login = async (email: string, password: string) => {
-    // Mock login - in real app this would call an API
-    await new Promise(resolve => setTimeout(resolve, 500));
-    setUser({
-      id: '1',
-      username: 'johndoe',
-      email: email,
-    });
+    await loginRequest(email, password);
+    const me = await getCurrentUser();
+    setUser(me);
 
-    // Check if user has seen the historical data toast
     const hasSeenToast = localStorage.getItem('hasSeenHistoricalDataToast');
     if (!hasSeenToast) {
       setTimeout(() => {
@@ -42,15 +67,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signup = async (email: string, password: string, username: string) => {
-    // Mock signup - in real app this would call an API
-    await new Promise(resolve => setTimeout(resolve, 500));
-    setUser({
-      id: '1',
-      username: username,
-      email: email,
-    });
+    await signupRequest(username, email, password);
+    await login(username, password);
 
-    // Show toast for new users
     setTimeout(() => {
       toast.info('You can enable historical data from your profile settings', {
         duration: 3000,
@@ -59,7 +78,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, 1000);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await logoutRequest();
     setUser(null);
   };
 
@@ -71,6 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signup,
         logout,
         isAuthenticated: !!user,
+        isLoadingAuth,
       }}
     >
       {children}

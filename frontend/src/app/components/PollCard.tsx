@@ -7,17 +7,17 @@ import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { Bookmark, BookmarkCheck, Minus, Plus, MessageSquare } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Poll } from '../lib/mockData';
+import type { Poll } from '../lib/types';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 
 interface PollCardProps {
   poll: Poll;
   isBookmarked?: boolean;
-  onBookmarkToggle?: (pollId: string) => void;
+  onBookmarkToggle?: (pollId: string) => Promise<void> | void;
   showChart?: boolean;
   availableVotes?: number;
-  onVoteSubmit?: (voteCount: number) => void;
+  onVoteSubmit?: (pollId: string, optionId: string, voteCount: number) => Promise<void>;
   showHistoricalDataByDefault?: boolean;
 }
 
@@ -40,6 +40,10 @@ export function PollCard({
 
   const totalVotes = localVotes.reduce((sum, option) => sum + option.votes, 0);
   const shouldShowData = showHistoricalDataByDefault || isDataRevealed;
+
+  React.useEffect(() => {
+    setLocalVotes(poll.options);
+  }, [poll.options]);
 
   const handleVoteCountChange = (delta: number) => {
     // Strictly prevent going beyond available votes
@@ -66,26 +70,26 @@ export function PollCard({
 
     setIsLoading(true);
 
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 600));
+    try {
+      if (onVoteSubmit) {
+        await onVoteSubmit(poll.id, selectedOption, voteCount);
+      }
 
-    // Update local vote counts
-    const updatedVotes = localVotes.map(option =>
-      option.id === selectedOption
-        ? { ...option, votes: option.votes + voteCount }
-        : option
-    );
-    setLocalVotes(updatedVotes);
+      const updatedVotes = localVotes.map(option =>
+        option.id === selectedOption
+          ? { ...option, votes: option.votes + voteCount }
+          : option
+      );
+      setLocalVotes(updatedVotes);
 
-    // Update available votes in parent
-    if (onVoteSubmit) {
-      onVoteSubmit(voteCount);
+      toast.success(`Successfully voted with ${voteCount} vote${voteCount > 1 ? 's' : ''}!`);
+      setSelectedOption('');
+      setVoteCount(1);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to submit vote');
+    } finally {
+      setIsLoading(false);
     }
-
-    toast.success(`Successfully voted with ${voteCount} vote${voteCount > 1 ? 's' : ''}!`);
-    setSelectedOption('');
-    setVoteCount(1);
-    setIsLoading(false);
   };
 
   // Prepare chart data
@@ -95,7 +99,7 @@ export function PollCard({
         entry => entry.timestamp.getTime() === item.timestamp.getTime()
       );
       
-      const option = poll.options.find(opt => opt.id === item.optionId);
+      const option = poll.options.find(opt => String(opt.id) === String(item.optionId));
       const optionName = option?.text || item.optionId;
       
       if (existingEntry) {

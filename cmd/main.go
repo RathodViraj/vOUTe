@@ -58,8 +58,17 @@ func main() {
 	}
 
 	middleware.AddDBInMiddleware(mongoClinet.Database("voute"), "users")
+	allowedOrigins := map[string]bool{
+		"http://localhost:5173": true,
+		"http://127.0.0.1:5173": true,
+	}
 	r.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		origin := c.GetHeader("Origin")
+		if allowedOrigins[origin] {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Credentials", "true")
+		}
+		c.Header("Vary", "Origin")
 		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if c.Request.Method == http.MethodOptions {
@@ -100,7 +109,7 @@ func main() {
 	bookmarksHandler.AddBookmarksRoutes(r)
 
 	hub := ws.NewHub(voteRepo)
-	r.POST("/ws/polls", ws.WSHandler(hub))
+	r.GET("/ws/polls", ws.WSHandler(hub))
 
 	r.Run(":8080")
 }

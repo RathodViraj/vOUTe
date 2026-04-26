@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router';
 import { PollCard } from '../components/PollCard';
-import { mockPolls, mockBookmarkedPolls } from '../lib/mockData';
 import { useSettings } from '../contexts/SettingsContext';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { getBookmarks, getPolls, getPollsWsUrl, toggleBookmark, voteOnPoll } from '../lib/api';
+import type { Poll } from '../lib/types';
+import { toast } from 'sonner';
 
 interface OutletContext {
   availableVotes: number;
@@ -13,29 +15,93 @@ interface OutletContext {
 type FilterType = 'all' | 'live' | 'closed';
 
 export function HomePage() {
-  const [bookmarkedPolls, setBookmarkedPolls] = useState<string[]>(mockBookmarkedPolls);
+  const [polls, setPolls] = useState<Poll[]>([]);
+  const [bookmarkedPolls, setBookmarkedPolls] = useState<string[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
   const { availableVotes, setAvailableVotes } = useOutletContext<OutletContext>();
   const { showHistoricalData } = useSettings();
 
-  const handleBookmarkToggle = (pollId: string) => {
-    setBookmarkedPolls(prev =>
-      prev.includes(pollId)
-        ? prev.filter(id => id !== pollId)
-        : [...prev, pollId]
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [loadedPolls, loadedBookmarks] = await Promise.all([
+          getPolls(filter === 'all' ? undefined : filter),
+          getBookmarks(),
+        ]);
+        setPolls(loadedPolls);
+        setBookmarkedPolls(loadedBookmarks);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to load polls');
+      }
+    };
+
+    load();
+  }, [filter]);
+
+  useEffect(() => {
+    const ws = new WebSocket(getPollsWsUrl());
+
+    ws.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data) as {
+          changes?: Array<{
+            poll_id: string;
+            options: Array<{ option_id: string; vote_count: number }>;
+          }>;
+        };
+
+        if (!payload.changes || payload.changes.length === 0) {
+          return;
+        }
+
+        const now = new Date();
+
+        setPolls((prev) =>
+          prev.map((poll) => {
+            const update = payload.changes?.find((c) => c.poll_id === poll.id);
+            if (!update) return poll;
+
+            const updatedOptions = poll.options.map((option) => {
+              const optionUpdate = update.options.find((o) => o.option_id === option.id);
+              if (!optionUpdate) return option;
+              return { ...option, votes: optionUpdate.vote_count };
+            });
+
+            const historyPoint = update.options.map((optionUpdate) => ({
+              timestamp: now,
+              optionId: optionUpdate.option_id,
+              votes: optionUpdate.vote_count,
+            }));
+
+            return {
+              ...poll,
+              options: updatedOptions,
+              history: [...poll.history, ...historyPoint].slice(-240),
+            };
+          }),
+        );
+      } catch {
+        // Ignore malformed socket payloads.
+      }
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, []);
+
+  const handleBookmarkToggle = async (pollId: string) => {
+    const isBookmarked = bookmarkedPolls.includes(pollId);
+    await toggleBookmark(pollId, !isBookmarked);
+    setBookmarkedPolls((prev) =>
+      isBookmarked ? prev.filter((id) => id !== pollId) : [...prev, pollId],
     );
   };
 
-  const handleVoteSubmit = (voteCount: number) => {
+  const handleVoteSubmit = async (pollId: string, optionId: string, voteCount: number) => {
+    await voteOnPoll(pollId, optionId, voteCount);
     setAvailableVotes(prev => prev - voteCount);
   };
-
-  const filteredPolls = mockPolls.filter(poll => {
-    if (filter === 'all') return true;
-    if (filter === 'live') return poll.isLive;
-    if (filter === 'closed') return !poll.isLive;
-    return true;
-  });
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -57,7 +123,7 @@ export function HomePage() {
       </div>
 
       <div className="space-y-6">
-        {filteredPolls.map(poll => (
+        {polls.map(poll => (
           <PollCard
             key={poll.id}
             poll={poll}

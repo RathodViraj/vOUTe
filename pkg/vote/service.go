@@ -12,6 +12,8 @@ type VoteService interface {
 	ListVote(ctx context.Context, skip, take int) ([]*Vote, error)
 	GetVoteByID(ctx context.Context, id string) (*Vote, error)
 	GetVotesByCreatorID(ctx context.Context, creatorID string, skip, take int) ([]*Vote, error)
+	GetUserVotedPolls(ctx context.Context, userID string) ([]string, error)
+	GetRemainingVotes(ctx context.Context, userID string) (int64, error)
 	AddVote(ctx context.Context, userID, voteID, optionID string, count int64) error
 	CloseVote(ctx context.Context, voteID string) error
 	EditTitle(ctx context.Context, voteID, newTitle string) error
@@ -101,6 +103,14 @@ func (s *voteService) GetVotesByCreatorID(ctx context.Context, creatorID string,
 
 func (s *voteService) AddVote(ctx context.Context, userID, voteID, optionID string, count int64) error {
 	return s.repo.AddVote(ctx, userID, voteID, optionID, count)
+}
+
+func (s *voteService) GetUserVotedPolls(ctx context.Context, userID string) ([]string, error) {
+	return s.repo.GetUserVotedPolls(ctx, userID)
+}
+
+func (s *voteService) GetRemainingVotes(ctx context.Context, userID string) (int64, error) {
+	return s.repo.GetRemainingVotes(ctx, userID)
 }
 
 func (s *voteService) CloseVote(ctx context.Context, voteID string) error {

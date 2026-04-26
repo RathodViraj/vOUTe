@@ -8,6 +8,7 @@ import { Switch } from '../components/ui/switch';
 import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { toast } from 'sonner';
+import { deleteAccount, updatePassword } from '../lib/api';
 import { User, Mail, Lock, LogOut, Trash2, ChartLine } from 'lucide-react';
 import {
   AlertDialog,
@@ -39,19 +40,24 @@ export function ProfilePage() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     toast.success('Logged out successfully');
     navigate('/login');
   };
 
-  const handleDeleteAccount = () => {
-    logout();
-    toast.success('Account deleted successfully');
-    navigate('/login');
+  const handleDeleteAccount = async () => {
+    try {
+      await deleteAccount();
+      await logout();
+      toast.success('Account deleted successfully');
+      navigate('/login');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to delete account');
+    }
   };
 
-  const handleChangePassword = () => {
+  const handleChangePassword = async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
       toast.error('Please fill in all fields');
       return;
@@ -67,11 +73,16 @@ export function ProfilePage() {
       return;
     }
 
-    toast.success('Password changed successfully');
-    setIsChangePasswordOpen(false);
-    setCurrentPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
+    try {
+      await updatePassword(user.email, newPassword);
+      toast.success('Password changed successfully');
+      setIsChangePasswordOpen(false);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to change password');
+    }
   };
 
   if (!user) {

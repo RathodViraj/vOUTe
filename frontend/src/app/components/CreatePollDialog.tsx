@@ -16,12 +16,13 @@ import { toast } from 'sonner';
 interface CreatePollDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreatePoll: (title: string, options: string[]) => void;
+  onCreatePoll: (title: string, options: string[]) => Promise<void>;
 }
 
 export function CreatePollDialog({ open, onOpenChange, onCreatePoll }: CreatePollDialogProps) {
   const [title, setTitle] = useState('');
   const [options, setOptions] = useState<string[]>(['', '']);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleAddOption = () => {
     if (options.length < 4) {
@@ -41,7 +42,7 @@ export function CreatePollDialog({ open, onOpenChange, onCreatePoll }: CreatePol
     setOptions(newOptions);
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!title.trim()) {
       toast.error('Please enter a poll title');
       return;
@@ -53,14 +54,18 @@ export function CreatePollDialog({ open, onOpenChange, onCreatePoll }: CreatePol
       return;
     }
 
-    onCreatePoll(title.trim(), filledOptions);
-
-    // Reset form
-    setTitle('');
-    setOptions(['', '']);
-    onOpenChange(false);
-
-    toast.success('Poll created successfully!');
+    setIsSubmitting(true);
+    try {
+      await onCreatePoll(title.trim(), filledOptions);
+      setTitle('');
+      setOptions(['', '']);
+      onOpenChange(false);
+      toast.success('Poll created successfully!');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to create poll');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleCancel = () => {
@@ -98,6 +103,7 @@ export function CreatePollDialog({ open, onOpenChange, onCreatePoll }: CreatePol
                     placeholder={`Option ${index + 1}`}
                     value={option}
                     onChange={(e) => handleOptionChange(index, e.target.value)}
+                    disabled={isSubmitting}
                   />
                   {options.length > 2 && (
                     <Button
@@ -105,6 +111,7 @@ export function CreatePollDialog({ open, onOpenChange, onCreatePoll }: CreatePol
                       size="icon"
                       onClick={() => handleRemoveOption(index)}
                       className="shrink-0"
+                      disabled={isSubmitting}
                     >
                       <X className="h-4 w-4" />
                     </Button>
@@ -118,6 +125,7 @@ export function CreatePollDialog({ open, onOpenChange, onCreatePoll }: CreatePol
                 size="sm"
                 onClick={handleAddOption}
                 className="w-full"
+                disabled={isSubmitting}
               >
                 <Plus className="h-4 w-4 mr-2" />
                 Add Option
@@ -126,11 +134,11 @@ export function CreatePollDialog({ open, onOpenChange, onCreatePoll }: CreatePol
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={handleCancel}>
+          <Button variant="outline" onClick={handleCancel} disabled={isSubmitting}>
             Cancel
           </Button>
-          <Button onClick={handleCreate} className="bg-indigo-600 hover:bg-indigo-700">
-            Create Poll
+          <Button onClick={handleCreate} className="bg-indigo-600 hover:bg-indigo-700" disabled={isSubmitting}>
+            {isSubmitting ? 'Creating...' : 'Create Poll'}
           </Button>
         </DialogFooter>
       </DialogContent>
