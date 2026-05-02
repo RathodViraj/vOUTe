@@ -8,14 +8,12 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.12.3
 	github.com/redis/go-redis/v9 v9.18.0
+	github.com/wneessen/go-mail v0.6.0
 	go.mongodb.org/mongo-driver v1.17.9
 	golang.org/x/crypto v0.48.0
 )
 
-require (
-	github.com/sendgrid/rest v2.6.9+incompatible // indirect
-	github.com/sendgrid/sendgrid-go v3.16.1+incompatible // indirect
-)
+require github.com/sendgrid/rest v2.6.9+incompatible // indirect
 
 require (
 	github.com/bytedance/gopkg v0.1.3 // indirect

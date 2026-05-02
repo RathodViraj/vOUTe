@@ -1,26 +1,81 @@
 import React, { useEffect, useState } from 'react';
 import { Card } from '../components/ui/card';
-import { Badge } from '../components/ui/badge';
-import { formatDistanceToNow } from 'date-fns';
 import { CheckCircle2 } from 'lucide-react';
-import { getPastVotes } from '../lib/api';
-import type { PastVoteItem } from '../lib/types';
+import { getPastVotes, getPollsWsUrl } from '../lib/api';
+import { PollCard } from '../components/PollCard';
+import type { Poll } from '../lib/types';
 import { toast } from 'sonner';
 
 export function PastVotesPage() {
-  const [pastVotes, setPastVotes] = useState<PastVoteItem[]>([]);
+  const [pastVotes, setPastVotes] = useState<Poll[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const loadPastVotes = async () => {
       try {
-        const votes = await getPastVotes();
-        setPastVotes(votes);
+        setIsLoading(true);
+        const pollsData = await getPastVotes();
+        setPastVotes(pollsData);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Failed to load past votes');
+      } finally {
+        setIsLoading(false);
       }
     };
 
     loadPastVotes();
+  }, []);
+
+  useEffect(() => {
+    const ws = new WebSocket(getPollsWsUrl());
+
+    ws.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data) as {
+          changes?: Array<{
+            poll_id: string;
+            options: Array<{ option_id: string; vote_count: number }>;
+          }>;
+        };
+
+        if (!payload.changes || payload.changes.length === 0) {
+          return;
+        }
+
+        const now = new Date();
+
+        setPastVotes((prev) =>
+          prev.map((poll) => {
+            const update = payload.changes?.find((c) => c.poll_id === poll.id);
+            if (!update) return poll;
+
+            const updatedOptions = poll.options.map((option) => {
+              const optionUpdate = update.options.find((o) => o.option_id === option.id);
+              if (!optionUpdate) return option;
+              return { ...option, votes: optionUpdate.vote_count };
+            });
+
+            const historyPoint = update.options.map((optionUpdate) => ({
+              timestamp: now,
+              optionId: optionUpdate.option_id,
+              votes: optionUpdate.vote_count,
+            }));
+
+            return {
+              ...poll,
+              options: updatedOptions,
+              history: [...(poll.history || []), ...historyPoint].slice(-240),
+            };
+          }),
+        );
+      } catch {
+        // Ignore malformed socket payloads.
+      }
+    };
+
+    return () => {
+      ws.close();
+    };
   }, []);
 
   return (
@@ -32,7 +87,11 @@ export function PastVotesPage() {
         </p>
       </div>
 
-      {pastVotes.length === 0 ? (
+      {isLoading ? (
+        <Card className="p-12 text-center">
+          <p className="text-muted-foreground">Loading your voting history...</p>
+        </Card>
+      ) : pastVotes.length === 0 ? (
         <Card className="p-12 text-center">
           <div className="flex flex-col items-center gap-4">
             <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
@@ -48,25 +107,14 @@ export function PastVotesPage() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {pastVotes.map((vote) => (
-            <Card key={vote.pollId} className="p-6 hover:shadow-lg transition-shadow">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1">
-                  <h3 className="text-lg font-semibold mb-2">{vote.pollTitle}</h3>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <Badge variant="secondary" className="text-sm">
-                      Poll #{vote.pollId}
-                    </Badge>
-                    <Badge className="text-sm bg-indigo-600">
-                      {vote.isLive ? 'Live' : 'Closed'}
-                    </Badge>
-                  </div>
-                </div>
-                <div className="text-sm text-muted-foreground text-right">
-                  {formatDistanceToNow(vote.timestamp, { addSuffix: true })}
-                </div>
-              </div>
-            </Card>
+          {pastVotes.map((poll) => (
+            <PollCard
+              key={poll.id}
+              poll={poll}
+              showChart
+              showHistoricalDataByDefault
+              readOnly
+            />
           ))}
         </div>
       )}

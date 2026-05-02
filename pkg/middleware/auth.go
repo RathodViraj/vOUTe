@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"voute/pkg/mailing"
 	"voute/pkg/response"
 	"voute/pkg/utils"
 
@@ -25,6 +26,12 @@ func AddDBInMiddleware(mongoDB *mongo.Database, name string) {
 	}
 }
 
+func AddMailingServiceInMiddleware(mailService mailing.EmailService) {
+	if db != nil {
+		db.emailService = mailService
+	}
+}
+
 type Claims struct {
 	UserID   string `json:"user_id"`
 	UserName string `json:"user_name"`
@@ -40,6 +47,23 @@ type LoginWithEmailRequest struct {
 type LoginWithUsernameRequest struct {
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
+}
+
+type SignupWithOTPRequest struct {
+	Username          string `json:"username" binding:"required"`
+	Email             string `json:"email" binding:"required,email"`
+	Password          string `json:"password" binding:"required,min=6"`
+	VerificationToken string `json:"verification_token" binding:"required"`
+}
+
+type LoginWithOTPRequest struct {
+	Email string `json:"email" binding:"required,email"`
+	OTP   string `json:"otp" binding:"required"`
+}
+
+type LoginWithOTPUsernameRequest struct {
+	Username string `json:"username" binding:"required"`
+	OTP      string `json:"otp" binding:"required"`
 }
 
 type TokenPair struct {
@@ -290,4 +314,152 @@ func ResetPassword(c *gin.Context) {
 	}
 
 	response.SendResponse(c, http.StatusOK, "success", "password reset successfully", nil)
+}
+
+// SignupWithOTP handles user registration with OTP verification
+func SignupWithOTP(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var req SignupWithOTPRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request body", nil)
+		return
+	}
+
+	// Verify OTP
+	if db.emailService == nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "email service not configured", nil)
+		return
+	}
+
+	// Validate verification token and retrieve email
+	email, err := db.emailService.GetEmailByVerificationToken(ctx, req.VerificationToken)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to validate verification token: "+err.Error(), nil)
+		return
+	}
+	if email == "" || email != req.Email {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid or expired verification token", nil)
+		return
+	}
+
+	// Create user
+	userID, err := db.CreateUser(ctx, req.Username, req.Email, req.Password)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", err.Error(), nil)
+		return
+	}
+
+	// Generate token pair
+	pair, err := generateTokePair(strconv.FormatInt(userID, 10), req.Username, "user")
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "could not generate tokens", nil)
+		return
+	}
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", useSecureCookies(), true)
+	response.SendResponse(c, http.StatusOK, "success", "signup successful", pair)
+}
+
+// LoginWithOTP handles login with OTP verification (email)
+func LoginWithOTP(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var req LoginWithOTPRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request body", nil)
+		return
+	}
+
+	// Verify OTP
+	if db.emailService == nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "email service not configured", nil)
+		return
+	}
+
+	isValid, err := db.emailService.VerifyOTP(ctx, req.Email, req.OTP)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to verify OTP: "+err.Error(), nil)
+		return
+	}
+
+	if !isValid {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid or expired OTP", nil)
+		return
+	}
+
+	// Fetch user by email
+	userID, username, _, role, err := db.FetchUserByEmail(ctx, req.Email)
+	if err != nil {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "user not found", nil)
+		return
+	}
+
+	// Generate token pair
+	pair, err := generateTokePair(strconv.FormatInt(userID, 10), username, role)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "could not generate tokens", nil)
+		return
+	}
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", useSecureCookies(), true)
+	response.SendResponse(c, http.StatusOK, "success", "login successful", pair)
+}
+
+// LoginWithOTPUsername handles login with OTP verification (username)
+func LoginWithOTPUsername(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var req LoginWithOTPUsernameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request body", nil)
+		return
+	}
+
+	// Get email from username
+	if db.emailService == nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "email service not configured", nil)
+		return
+	}
+
+	email, err := db.GetEmailByUsername(ctx, req.Username)
+	if err != nil {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "user not found", nil)
+		return
+	}
+
+	// Verify OTP
+	isValid, err := db.emailService.VerifyOTP(ctx, email, req.OTP)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to verify OTP: "+err.Error(), nil)
+		return
+	}
+
+	if !isValid {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid or expired OTP", nil)
+		return
+	}
+
+	// Fetch user by username
+	userID, _, role, err := db.FetchUserByUsername(ctx, req.Username)
+	if err != nil {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "user not found", nil)
+		return
+	}
+
+	// Generate token pair
+	pair, err := generateTokePair(strconv.FormatInt(userID, 10), req.Username, role)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "could not generate tokens", nil)
+		return
+	}
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", useSecureCookies(), true)
+	response.SendResponse(c, http.StatusOK, "success", "login successful", pair)
 }

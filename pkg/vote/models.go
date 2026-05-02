@@ -2,6 +2,11 @@ package vote
 
 import "time"
 
+type UserVote struct {
+	OptionID  int64 `json:"option_id,string"`
+	VoteCount int64 `json:"vote_count"`
+}
+
 type Option struct {
 	ID        int64  `json:"id,omitempty,string" bson:"_id"`
 	VoteID    int64  `json:"vote_id,string" bson:"vote_id"`
@@ -17,6 +22,13 @@ type Vote struct {
 	Status      string   `json:"status" binding:"oneof=created live closed" bson:"status"`
 	IsDeleted   bool     `json:"is_deleted" bson:"is_deleted"`
 	CreatedAt   int64    `json:"created_at" bson:"created_at"`
+	UserVote    *UserVote `json:"user_vote,omitempty" bson:"-"`
+}
+
+type UserVotedPoll struct {
+	VoteID    int64
+	OptionID  int64
+	VoteCount int64
 }
 
 type CreateRequest struct {

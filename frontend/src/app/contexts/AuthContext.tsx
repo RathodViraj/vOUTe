@@ -24,23 +24,43 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  const [tokenChangeKey, setTokenChangeKey] = useState(0);
+
+  // Listen for storage changes and token updates
+  useEffect(() => {
+    const handleTokenChange = () => {
+      setTokenChangeKey(k => k + 1);
+    };
+    window.addEventListener('storage', handleTokenChange);
+    window.addEventListener('auth-token-changed', handleTokenChange);
+    return () => {
+      window.removeEventListener('storage', handleTokenChange);
+      window.removeEventListener('auth-token-changed', handleTokenChange);
+    };
+  }, []);
 
   useEffect(() => {
     const bootstrapAuth = async () => {
+      setIsLoadingAuth(true);
       try {
         if (!hasAccessToken()) {
-          await refreshAccessToken();
+          setUser(null);
+          setIsLoadingAuth(false);
+          return;
         }
 
-        const me = await getCurrentUser();
-        setUser(me);
-      } catch {
         try {
-          await refreshAccessToken();
           const me = await getCurrentUser();
           setUser(me);
         } catch {
-          setUser(null);
+          // Token might be expired, try refreshing
+          try {
+            await refreshAccessToken();
+            const me = await getCurrentUser();
+            setUser(me);
+          } catch {
+            setUser(null);
+          }
         }
       } finally {
         setIsLoadingAuth(false);
@@ -48,7 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     bootstrapAuth();
-  }, []);
+  }, [tokenChangeKey]);
 
   const login = async (email: string, password: string) => {
     await loginRequest(email, password);

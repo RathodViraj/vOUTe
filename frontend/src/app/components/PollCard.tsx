@@ -5,11 +5,22 @@ import { Button } from './ui/button';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
-import { Bookmark, BookmarkCheck, Minus, Plus, MessageSquare } from 'lucide-react';
+import { Bookmark, BookmarkCheck, Minus, Plus, MessageSquare, Lock } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { Poll } from '../lib/types';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from './ui/alert-dialog';
 
 interface PollCardProps {
   poll: Poll;
@@ -19,6 +30,8 @@ interface PollCardProps {
   availableVotes?: number;
   onVoteSubmit?: (pollId: string, optionId: string, voteCount: number) => Promise<void>;
   showHistoricalDataByDefault?: boolean;
+  readOnly?: boolean;
+  onClosePoll?: (pollId: string) => Promise<void>;
 }
 
 export function PollCard({
@@ -29,6 +42,8 @@ export function PollCard({
   availableVotes = 24,
   onVoteSubmit,
   showHistoricalDataByDefault = false,
+  readOnly = false,
+  onClosePoll,
 }: PollCardProps) {
   const navigate = useNavigate();
   const [selectedOption, setSelectedOption] = useState<string>('');
@@ -36,7 +51,7 @@ export function PollCard({
   const [localVotes, setLocalVotes] = useState(poll.options);
   const [isLoading, setIsLoading] = useState(false);
   const [isDataRevealed, setIsDataRevealed] = useState(false);
-  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const totalVotes = localVotes.reduce((sum, option) => sum + option.votes, 0);
   const shouldShowData = showHistoricalDataByDefault || isDataRevealed;
@@ -168,6 +183,34 @@ export function PollCard({
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {poll.isLive && onClosePoll && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Lock className="w-4 h-4 mr-2" />
+                  Close Poll
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Close this poll?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Once closed, users will no longer be able to vote on this poll. This action cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => onClosePoll(poll.id)}
+                    className="bg-indigo-600 hover:bg-indigo-700"
+                  >
+                    Close Poll
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          )}
+
           <Button
             variant="ghost"
             size="icon"
@@ -193,25 +236,32 @@ export function PollCard({
         </div>
       </div>
 
-      <RadioGroup value={selectedOption} onValueChange={setSelectedOption}>
+      {readOnly ? (
         <div className="space-y-2">
           {localVotes.map(option => {
             const percentage = totalVotes > 0 ? (option.votes / totalVotes) * 100 : 0;
-            
+            const isUserChoice = poll.userVote?.optionId === option.id;
+
             return (
               <div key={option.id} className="relative">
-                <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-accent/50 transition-colors cursor-pointer">
-                  <RadioGroupItem value={option.id} id={option.id} />
-                  <Label htmlFor={option.id} className="flex-1 cursor-pointer">
-                    <div className="flex items-center justify-between">
-                      <span>{option.text}</span>
-                      {shouldShowData && (
-                        <span className="text-sm text-muted-foreground ml-4">
-                          {option.votes.toLocaleString()} ({percentage.toFixed(1)}%)
-                        </span>
+                <div className={`flex items-center space-x-3 p-3 rounded-lg border ${isUserChoice ? 'border-indigo-500 bg-indigo-500/10' : 'bg-accent/20'}`}>
+                  <div className="w-4 h-4 rounded-full border border-muted-foreground/40 bg-background shrink-0" />
+                  <div className="flex-1 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-medium truncate">{option.text}</span>
+                      {isUserChoice && (
+                        <Badge variant="secondary" className="text-[10px] uppercase tracking-wide">
+                          Your vote
+                        </Badge>
                       )}
                     </div>
-                  </Label>
+                    {shouldShowData && (
+                      <span className="text-sm text-muted-foreground whitespace-nowrap">
+                        {option.votes.toLocaleString()} ({percentage.toFixed(1)}%)
+                        {isUserChoice && poll.userVote ? ` · ${poll.userVote.voteCount} voted` : ''}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 {shouldShowData && (
                   <div
@@ -223,46 +273,82 @@ export function PollCard({
             );
           })}
         </div>
-      </RadioGroup>
+      ) : (
+        <>
+          <RadioGroup value={selectedOption} onValueChange={setSelectedOption}>
+            <div className="space-y-2">
+              {localVotes.map(option => {
+                const percentage = totalVotes > 0 ? (option.votes / totalVotes) * 100 : 0;
 
-{voteCount > 0 && selectedOption && voteCount <= availableVotes && (
-        <div className="text-sm text-muted-foreground px-1">
-          <p>After voting, you will have <span className="font-semibold text-indigo-600">{availableVotes - voteCount}</span> vote{availableVotes - voteCount !== 1 ? 's' : ''} left</p>
-        </div>
-      )}
+                return (
+                  <div key={option.id} className="relative">
+                    <div className="flex items-center space-x-3 p-3 rounded-lg border hover:bg-accent/50 transition-colors cursor-pointer">
+                      <RadioGroupItem value={option.id} id={option.id} />
+                      <Label htmlFor={option.id} className="flex-1 cursor-pointer">
+                        <div className="flex items-center justify-between">
+                          <span>{option.text}</span>
+                          {shouldShowData && (
+                            <span className="text-sm text-muted-foreground ml-4">
+                              {option.votes.toLocaleString()} ({percentage.toFixed(1)}%)
+                            </span>
+                          )}
+                        </div>
+                      </Label>
+                    </div>
+                    {shouldShowData && (
+                      <div
+                        className="absolute bottom-0 left-0 h-1 bg-indigo-500 rounded-full transition-all duration-500"
+                        style={{ width: `${percentage}%` }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </RadioGroup>
 
-      <div className="flex items-center gap-3 pt-2">
-        <div className="flex items-center border rounded-lg">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => handleVoteCountChange(-1)}
-            disabled={voteCount <= 1 || isLoading || !poll.isLive}
-            className="h-9 w-9"
-          >
-            <Minus className="h-4 w-4" />
-          </Button>
-          <div className="px-4 py-2 min-w-[60px] text-center font-medium">
-            {voteCount}
+          {voteCount > 0 && selectedOption && voteCount <= availableVotes && (
+            <div className="text-sm text-muted-foreground px-1">
+              <p>
+                After voting, you will have <span className="font-semibold text-indigo-600">{availableVotes - voteCount}</span> vote{availableVotes - voteCount !== 1 ? 's' : ''} left
+              </p>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-2">
+            <div className="flex items-center border rounded-lg">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => handleVoteCountChange(-1)}
+                disabled={voteCount <= 1 || isLoading || !poll.isLive}
+                className="h-9 w-9"
+              >
+                <Minus className="h-4 w-4" />
+              </Button>
+              <div className="px-4 py-2 min-w-[60px] text-center font-medium">
+                {voteCount}
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => handleVoteCountChange(1)}
+                disabled={voteCount >= Math.min(100, availableVotes) || isLoading || !poll.isLive}
+                className="h-9 w-9"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+            <Button
+              onClick={handleVote}
+              disabled={!selectedOption || isLoading || availableVotes === 0 || voteCount > availableVotes || !poll.isLive}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Voting...' : !poll.isLive ? 'Poll Closed' : availableVotes === 0 ? 'No Votes Available' : 'Vote'}
+            </Button>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => handleVoteCountChange(1)}
-            disabled={voteCount >= Math.min(100, availableVotes) || isLoading || !poll.isLive}
-            className="h-9 w-9"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
-        <Button
-          onClick={handleVote}
-          disabled={!selectedOption || isLoading || availableVotes === 0 || voteCount > availableVotes || !poll.isLive}
-          className="flex-1 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {isLoading ? 'Voting...' : !poll.isLive ? 'Poll Closed' : availableVotes === 0 ? 'No Votes Available' : 'Vote'}
-        </Button>
-      </div>
+        </>
+      )}
 
       {showChart && shouldShowData && poll.history.length > 0 && (
         <div className="pt-4">

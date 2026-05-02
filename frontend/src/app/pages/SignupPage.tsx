@@ -105,11 +105,8 @@ export function SignupPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 via-white to-purple-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 px-4">
       <Card className="w-full max-w-md p-8 shadow-xl">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-600 to-purple-600 mb-4">
-            <span className="text-white font-bold text-3xl">V</span>
-          </div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent mb-2">
-            VOuTE
+            vOUTe
           </h1>
           <p className="text-muted-foreground">Create your account</p>
           
@@ -204,13 +201,23 @@ export function SignupPage() {
           </form>
         )}
 
-        <div className="mt-6 text-center text-sm">
-          <span className="text-muted-foreground">Already have an account? </span>
-          <Link to="/login">
-            <Button variant="link" className="px-0 text-indigo-600">
-              Sign in
-            </Button>
-          </Link>
+        <div className="mt-6 text-center text-sm space-y-2">
+          <div>
+            <span className="text-muted-foreground">Already have an account? </span>
+            <Link to="/login">
+              <Button variant="link" className="px-0 text-indigo-600">
+                Sign in
+              </Button>
+            </Link>
+          </div>
+          <div>
+            <span className="text-muted-foreground">Or sign up with </span>
+            <Link to="/signup-otp">
+              <Button variant="link" className="px-0 text-indigo-600">
+                OTP
+              </Button>
+            </Link>
+          </div>
         </div>
       </Card>
     </div>

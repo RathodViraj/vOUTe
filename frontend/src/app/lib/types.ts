@@ -4,6 +4,11 @@ export interface PollOption {
   votes: number;
 }
 
+export interface UserVote {
+  optionId: string;
+  voteCount: number;
+}
+
 export interface VoteHistory {
   timestamp: Date;
   optionId: string;
@@ -17,6 +22,7 @@ export interface Poll {
   createdAt: Date;
   isLive: boolean;
   history: VoteHistory[];
+  userVote?: UserVote;
 }
 
 export interface User {
@@ -38,4 +44,7 @@ export interface PastVoteItem {
   pollTitle: string;
   timestamp: Date;
   isLive: boolean;
+  options: PollOption[];
+  createdAt: Date;
+  userVote?: UserVote;
 }

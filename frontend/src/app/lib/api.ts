@@ -20,6 +20,10 @@ type BackendVote = {
   status: string;
   options: BackendOption[];
   created_at: number;
+  user_vote?: {
+    option_id: string;
+    vote_count: number;
+  };
 };
 
 type HistoricOptionsData = {
@@ -69,6 +73,8 @@ function getAccessToken(): string | null {
 
 export function setAccessToken(token: string) {
   sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
+  // Trigger auth re-check in AuthContext
+  window.dispatchEvent(new Event('auth-token-changed'));
 }
 
 export function clearAccessToken() {
@@ -132,6 +138,12 @@ function mapVoteToPoll(vote: BackendVote, history: VoteHistory[] = []): Poll {
     createdAt: new Date((vote.created_at || 0) * 1000),
     isLive: vote.status === 'live',
     history,
+    userVote: vote.user_vote
+      ? {
+          optionId: String(vote.user_vote.option_id),
+          voteCount: vote.user_vote.vote_count,
+        }
+      : undefined,
   };
 }
 
@@ -373,18 +385,62 @@ export async function createComment(voteId: string, username: string, content: s
   };
 }
 
-export async function getPastVotes(): Promise<PastVoteItem[]> {
+export async function getPastVotes(): Promise<Poll[]> {
   const votes = await request<BackendVote[]>('/polls/voted', {
     method: 'GET',
     auth: true,
   });
 
-  return (votes || [])
-    .map((vote) => ({
-      pollId: String(vote.id),
-      pollTitle: vote.title,
-      timestamp: new Date((vote.created_at || 0) * 1000),
-      isLive: vote.status === 'live',
-    }))
-    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  return attachHistory(votes || []);
+}
+
+// OTP Authentication API
+
+export async function requestOTP(email: string, username?: string) {
+  const payload = email ? { email } : { username };
+  await request('/mailing/otp', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function verifyOTP(email: string, otp: string) {
+  const data = await request<{ verification_token?: string }>('/mailing/verify-otp', {
+    method: 'POST',
+    body: JSON.stringify({ email, otp }),
+  });
+  return data.verification_token;
+}
+
+export async function signupWithOTP(username: string, email: string, password: string, verification_token: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
+  const data = await request<{ access_token: string; refresh_token: string; expires_in: number }>('/auth/signup-otp', {
+    method: 'POST',
+    body: JSON.stringify({ username, email, password, verification_token }),
+  });
+  if (data.access_token) {
+    setAccessToken(data.access_token);
+  }
+  return data;
+}
+
+export async function loginWithOTP(email: string, otp: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
+  const data = await request<{ access_token: string; refresh_token: string; expires_in: number }>('/auth/login-otp', {
+    method: 'POST',
+    body: JSON.stringify({ email, otp }),
+  });
+  if (data.access_token) {
+    setAccessToken(data.access_token);
+  }
+  return data;
+}
+
+export async function loginWithOTPUsername(username: string, otp: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
+  const data = await request<{ access_token: string; refresh_token: string; expires_in: number }>('/auth/login-otp-username', {
+    method: 'POST',
+    body: JSON.stringify({ username, otp }),
+  });
+  if (data.access_token) {
+    setAccessToken(data.access_token);
+  }
+  return data;
 }

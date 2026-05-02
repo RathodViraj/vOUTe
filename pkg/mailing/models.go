@@ -1,7 +1,8 @@
 package mailing
 
 type GetOTPRequest struct {
-	Email string `json:"email" validate:"required,email"`
+	Email    string `json:"email" validate:"email" binding:"omitempty,email"`
+	Username string `json:"username" validate:"omitempty"`
 }
 
 type VerifyOTPRequest struct {

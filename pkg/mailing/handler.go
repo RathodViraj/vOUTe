@@ -32,24 +32,37 @@ func (h *mailingHandler) RegisterRoutes(router *gin.Engine) {
 }
 
 func (h *mailingHandler) GetOTP(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-	defer cancel()
+	// No timeout for email sending - it can take variable time
+	ctx := c.Request.Context()
 
 	var req GetOTPRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.SendResponse(c, http.StatusBadRequest, "success", "invalid request", nil)
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request body - provide either email or username", nil)
 		return
 	}
 
-	if err := h.service.SendOTPEmail(ctx, req.Email); err != nil {
-		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to send OTP email", nil)
+	// Validate that either email or username is provided
+	if req.Email == "" && req.Username == "" {
+		response.SendResponse(c, http.StatusBadRequest, "error", "either email or username is required", nil)
+		return
+	}
+
+	var err error
+	if req.Email != "" {
+		err = h.service.SendOTPEmail(ctx, req.Email)
+	} else {
+		err = h.service.SendOTPEmailByUsername(ctx, req.Username)
+	}
+
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to send OTP email: "+err.Error(), nil)
 		return
 	}
 	response.SendResponse(c, http.StatusOK, "success", "OTP email sent successfully", nil)
 }
 
 func (h *mailingHandler) VerifyOTP(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
 	var req VerifyOTPRequest
@@ -60,12 +73,18 @@ func (h *mailingHandler) VerifyOTP(c *gin.Context) {
 
 	isValid, err := h.service.VerifyOTP(ctx, req.Email, req.OTP)
 	if err != nil {
-		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to verify OTP", nil)
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to verify OTP: "+err.Error(), nil)
 		return
 	}
 	if !isValid {
 		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid OTP", nil)
 		return
 	}
-	response.SendResponse(c, http.StatusOK, "success", "OTP verified successfully", nil)
+	// create a short-lived verification token and return it to the client
+	token, err := h.service.CreateVerificationToken(ctx, req.Email)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to create verification token: "+err.Error(), nil)
+		return
+	}
+	response.SendResponse(c, http.StatusOK, "success", "OTP verified successfully", map[string]string{"verification_token": token})
 }

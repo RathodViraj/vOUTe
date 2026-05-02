@@ -60,11 +60,8 @@ export function AppLayout() {
           <div className="flex h-16 items-center justify-between">
             {/* Left: Logo */}
             <Link to="/home" className="flex items-center space-x-2">
-              <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-600 to-purple-600">
-                <span className="text-white font-bold text-xl">V</span>
-              </div>
               <span className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                VOuTE
+                vOUTe
               </span>
             </Link>
 

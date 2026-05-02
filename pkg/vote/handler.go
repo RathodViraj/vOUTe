@@ -176,16 +176,36 @@ func (h *voteHandler) GetUserVotedPolls(c *gin.Context) {
 		return
 	}
 
-	votedIDs, err := h.service.GetUserVotedPolls(ctx, claims.UserID)
+	votedPolls, err := h.service.GetUserVotedPolls(ctx, claims.UserID)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get voted polls", nil)
 		return
 	}
 
-	votes, err := h.service.GetFromIDs(ctx, votedIDs)
+	voteIDs := make([]string, 0, len(votedPolls))
+	voteMeta := make(map[string]UserVote, len(votedPolls))
+	for _, votedPoll := range votedPolls {
+		voteID := strconv.FormatInt(votedPoll.VoteID, 10)
+		voteIDs = append(voteIDs, voteID)
+		if votedPoll.OptionID > 0 && votedPoll.VoteCount > 0 {
+			voteMeta[voteID] = UserVote{
+				OptionID:  votedPoll.OptionID,
+				VoteCount: votedPoll.VoteCount,
+			}
+		}
+	}
+
+	votes, err := h.service.GetFromIDs(ctx, voteIDs)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get voted polls", nil)
 		return
+	}
+
+	for i := range votes {
+		voteID := strconv.FormatInt(votes[i].ID, 10)
+		if meta, ok := voteMeta[voteID]; ok {
+			votes[i].UserVote = &meta
+		}
 	}
 
 	response.SendResponse(c, http.StatusOK, "success", "voted polls retrieved successfully", votes)

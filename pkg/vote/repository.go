@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"strconv"
 	"time"
-
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -54,12 +54,12 @@ var tokenBucketScript = redis.NewScript(`
 		redis.call("HMSET", key, "remaining", remaining, "last_refill", last_refill)
 		redis.call("EXPIRE", key, 172800)
 		return 0
-	end
+ 	end
 
 	remaining = remaining - consume
-    redis.call("HMSET", key, "remaining", remaining, "last_refill", last_refill)
+	redis.call("HMSET", key, "remaining", remaining, "last_refill", last_refill)
 	redis.call("EXPIRE", key, 172800)
-    return 1
+	return 1
 `)
 
 type VoteRepository interface {
@@ -71,7 +71,7 @@ type VoteRepository interface {
 	ListLiveVote(ctx context.Context, skip, take int) ([]*Vote, error)
 	InitVoteInRedis(ctx context.Context, voteID int64, optionIDs []int64) error
 	AddVote(ctx context.Context, userID, voteID, optionID string, count int64) error
-	GetUserVotedPolls(ctx context.Context, userID string) ([]string, error)
+	GetUserVotedPolls(ctx context.Context, userID string) ([]UserVotedPoll, error)
 	GetRemainingVotes(ctx context.Context, userID string) (int64, error)
 	EditTitle(ctx context.Context, voteID, newTitle string) error
 	CloseVoteInMongo(ctx context.Context, voteID string) error
@@ -398,6 +398,19 @@ func (r *voteRepo) AddVote(ctx context.Context, userID, voteID, optionID string,
 		return ErrVoteLimitReached
 	}
 
+	metaKey := userVotedMetaKey(parsedUserID)
+	var newTotalCount int64 = count
+	if existingMeta, err := r.rdb.HGet(ctx, metaKey, voteID).Result(); err == nil {
+		parts := strings.Split(existingMeta, "|")
+		if len(parts) == 2 {
+			if oldOpt, _ := strconv.ParseInt(parts[0], 10, 64); oldOpt == parsedOptionID {
+				if oldCount, err2 := strconv.ParseInt(parts[1], 10, 64); err2 == nil {
+					newTotalCount += oldCount
+				}
+			}
+		}
+	}
+
 	now := time.Now()
 	pipe := r.rdb.Pipeline()
 
@@ -412,6 +425,10 @@ func (r *voteRepo) AddVote(ctx context.Context, userID, voteID, optionID string,
 		strconv.FormatInt(now.Add(-48*time.Hour).Unix(), 10),
 	)
 	pipe.Expire(ctx, userVotedPollsKey(parsedUserID), 48*time.Hour)
+	
+	pipe.HSet(ctx, metaKey, voteID, fmt.Sprintf("%d|%d", parsedOptionID, newTotalCount))
+	pipe.Expire(ctx, metaKey, 48*time.Hour)
+
 	// Increment the actual vote count
 	pipe.HIncrBy(ctx, voteKey(parsedVoteID), strconv.FormatInt(parsedOptionID, 10), count)
 	// Mark this poll as dirty for the WS broadcaster
@@ -466,21 +483,50 @@ func userVotedPollsKey(userID int64) string {
 	return "user:voted:" + strconv.FormatInt(userID, 10)
 }
 
-func (r *voteRepo) GetUserVotedPolls(ctx context.Context, userID string) ([]string, error) {
+func userVotedMetaKey(userID int64) string {
+	return "user:voted:meta:" + strconv.FormatInt(userID, 10)
+}
+
+func (r *voteRepo) GetUserVotedPolls(ctx context.Context, userID string) ([]UserVotedPoll, error) {
 	parsedUserId, err := parseVoteID(userID)
 	if err != nil {
 		return nil, err
 	}
 
 	cutoff := strconv.FormatInt(time.Now().Add(-24*time.Hour).Unix(), 10)
-	return r.rdb.ZRangeByScore(
-		ctx,
-		userVotedPollsKey(parsedUserId),
-		&redis.ZRangeBy{
-			Min: cutoff,
-			Max: "+inf",
-		},
-	).Result()
+	pipe := r.rdb.Pipeline()
+	idsCmd := pipe.ZRangeByScore(ctx, userVotedPollsKey(parsedUserId), &redis.ZRangeBy{Min: cutoff, Max: "+inf"})
+	metaCmd := pipe.HGetAll(ctx, userVotedMetaKey(parsedUserId))
+
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+
+	ids := idsCmd.Val()
+	meta := metaCmd.Val()
+	result := make([]UserVotedPoll, 0, len(ids))
+	for _, id := range ids {
+		parsedID, err := parseVoteID(id)
+		if err != nil {
+			continue
+		}
+
+		entry := UserVotedPoll{VoteID: parsedID}
+		if raw, ok := meta[id]; ok {
+			parts := strings.Split(raw, "|")
+			if len(parts) == 2 {
+				if optionID, err := parseVoteID(parts[0]); err == nil {
+					entry.OptionID = optionID
+				}
+				if voteCount, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+					entry.VoteCount = voteCount
+				}
+			}
+		}
+		result = append(result, entry)
+	}
+
+	return result, nil
 }
 
 func (r *voteRepo) GetRemainingVotes(ctx context.Context, userID string) (int64, error) {
@@ -718,7 +764,7 @@ func (r *voteRepo) GetPollsFromIDs(ctx context.Context, IDs []string) ([]Vote, e
 		}
 		parsedIDs = append(parsedIDs, parsedID)
 	}
-	filter := &bson.M{
+	filter := bson.M{
 		"_id": bson.M{
 			"$in": parsedIDs,
 		},
@@ -731,9 +777,20 @@ func (r *voteRepo) GetPollsFromIDs(ctx context.Context, IDs []string) ([]Vote, e
 
 	var votes []Vote
 	for cur.Next(ctx) {
-		var v Vote
-		if err := cur.Decode(&v); err == nil {
-			votes = append(votes, v)
+		var vote Vote
+		if err := cur.Decode(&vote); err == nil {
+			options, err := r.getOptionsByVoteID(ctx, vote.ID)
+			if err == nil {
+				vote.Options = options
+			}
+
+			voteCount, err := r.getVoteCount(ctx, vote.ID)
+			if err == nil {
+				for i, option := range vote.Options {
+					vote.Options[i].VoteCount = voteCount[option.ID]
+				}
+			}
+			votes = append(votes, vote)
 		}
 	}
 

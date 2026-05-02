@@ -88,6 +88,14 @@ func main() {
 	mailHandler := mailing.NewMailingHandler(mailSvc)
 	mailHandler.RegisterRoutes(r)
 
+	// Add mailing service to middleware for OTP authentication
+	middleware.AddMailingServiceInMiddleware(mailSvc)
+
+	// OTP-based authentication routes
+	r.POST("/auth/signup-otp", middleware.SignupWithOTP)
+	r.POST("/auth/login-otp", middleware.LoginWithOTP)
+	r.POST("/auth/login-otp-username", middleware.LoginWithOTPUsername)
+
 	userRepo := user.NewUserRepository(mongoClinet.Database("voute"))
 	userSvc := user.NewUserService(userRepo)
 	userHandler := user.NewHandler(userSvc, bloom)
