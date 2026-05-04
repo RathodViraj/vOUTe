@@ -106,7 +106,7 @@ export function LoginOTPPage() {
                   <Input
                     type="text"
                     placeholder="123456"
-                    maxLength="6"
+                    maxLength={6}
                     value={otp}
                     onChange={(e) => setOtp(e.target.value)}
                     disabled={loading}
@@ -166,7 +166,7 @@ export function LoginOTPPage() {
                   <Input
                     type="text"
                     placeholder="123456"
-                    maxLength="6"
+                    maxLength={6}
                     value={otp}
                     onChange={(e) => setOtp(e.target.value)}
                     disabled={loading}

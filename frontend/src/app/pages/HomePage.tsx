@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useOutletContext } from 'react-router';
 import { PollCard } from '../components/PollCard';
 import { useSettings } from '../contexts/SettingsContext';
@@ -37,6 +37,16 @@ export function HomePage() {
 
     load();
   }, [filter]);
+
+  const bookmarkTimersRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
+
+  useEffect(() => {
+    return () => {
+      Object.values(bookmarkTimersRef.current).forEach((t) => {
+        if (t) clearTimeout(t);
+      });
+    };
+  }, []);
 
   useEffect(() => {
     const ws = new WebSocket(getPollsWsUrl());
@@ -90,12 +100,28 @@ export function HomePage() {
     };
   }, []);
 
-  const handleBookmarkToggle = async (pollId: string) => {
+  const handleBookmarkToggle = (pollId: string) => {
     const isBookmarked = bookmarkedPolls.includes(pollId);
-    await toggleBookmark(pollId, !isBookmarked);
-    setBookmarkedPolls((prev) =>
-      isBookmarked ? prev.filter((id) => id !== pollId) : [...prev, pollId],
-    );
+    // Optimistic UI update
+    setBookmarkedPolls((prev) => (isBookmarked ? prev.filter((id) => id !== pollId) : [...prev, pollId]));
+
+    // Debounce backend call
+    if (bookmarkTimersRef.current[pollId]) {
+      clearTimeout(bookmarkTimersRef.current[pollId] as ReturnType<typeof setTimeout>);
+    }
+
+    const newFlag = !isBookmarked;
+    bookmarkTimersRef.current[pollId] = setTimeout(async () => {
+      try {
+        await toggleBookmark(pollId, newFlag);
+      } catch (err) {
+        // Revert optimistic update on failure
+        setBookmarkedPolls((prev) => (prev.includes(pollId) ? prev.filter((id) => id !== pollId) : [...prev, pollId]));
+        toast.error(err instanceof Error ? err.message : 'Failed to update bookmark');
+      } finally {
+        bookmarkTimersRef.current[pollId] = null;
+      }
+    }, 1000);
   };
 
   const handleVoteSubmit = async (pollId: string, optionId: string, voteCount: number) => {

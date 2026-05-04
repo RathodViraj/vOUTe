@@ -51,6 +51,7 @@ export function PollCard({
   const [localVotes, setLocalVotes] = useState(poll.options);
   const [isLoading, setIsLoading] = useState(false);
   const [isDataRevealed, setIsDataRevealed] = useState(false);
+  const [chartMode, setChartMode] = useState<'count' | 'percentage'>('count');
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const totalVotes = localVotes.reduce((sum, option) => sum + option.votes, 0);
@@ -107,29 +108,65 @@ export function PollCard({
     }
   };
 
-  // Prepare chart data
-  const chartData = poll.history
-    .reduce((acc: any[], item) => {
+  const chartData = React.useMemo(() => {
+    const grouped = poll.history.reduce((acc: any[], item) => {
       const existingEntry = acc.find(
         entry => entry.timestamp.getTime() === item.timestamp.getTime()
       );
-      
-      const option = poll.options.find(opt => String(opt.id) === String(item.optionId));
-      const optionName = option?.text || item.optionId;
-      
+
+      const optionId = String(item.optionId);
+
       if (existingEntry) {
-        existingEntry[optionName] = item.votes;
+        existingEntry[optionId] = item.votes;
       } else {
         acc.push({
           timestamp: item.timestamp,
           time: format(item.timestamp, 'HH:mm'),
-          [optionName]: item.votes,
+          [optionId]: item.votes,
         });
       }
-      
+
       return acc;
-    }, [])
-    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    }, []);
+
+    return grouped
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+      .map(entry => {
+        const totalAtPoint = poll.options.reduce((sum, option) => {
+          const value = Number(entry[String(option.id)] ?? 0);
+          return sum + value;
+        }, 0);
+
+        const nextEntry: Record<string, number | Date | string> = {
+          ...entry,
+          totalVotes: totalAtPoint,
+        };
+
+        poll.options.forEach(option => {
+          const rawValue = Number(entry[String(option.id)] ?? 0);
+          nextEntry[`${String(option.id)}_percentage`] = totalAtPoint > 0 ? (rawValue / totalAtPoint) * 100 : 0;
+        });
+
+        return nextEntry;
+      });
+  }, [poll.history, poll.options]);
+
+  const chartYAxisProps = chartMode === 'percentage'
+    ? {
+        domain: [0, 100] as [number, number],
+        tickFormatter: (value: number) => `${value.toFixed(0)}%`,
+      }
+    : {
+        tickFormatter: (value: number) => value.toLocaleString(),
+      };
+
+  const chartTooltipFormatter = (value: number) => {
+    if (chartMode === 'percentage') {
+      return [`${value.toFixed(1)}%`, 'Vote share'];
+    }
+
+    return [value.toLocaleString(), 'Votes'];
+  };
 
   const colors = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b'];
 
@@ -352,7 +389,31 @@ export function PollCard({
 
       {showChart && shouldShowData && poll.history.length > 0 && (
         <div className="pt-4">
-          <h4 className="text-sm font-medium mb-3 text-muted-foreground">Voting Trends (Last 24h)</h4>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h4 className="text-sm font-medium text-muted-foreground">
+              {chartMode === 'percentage' ? 'Voting Share (Last 24h)' : 'Voting Trends (Last 24h)'}
+            </h4>
+            <div className="inline-flex rounded-md border bg-background p-1">
+              <Button
+                type="button"
+                size="sm"
+                variant={chartMode === 'count' ? 'default' : 'ghost'}
+                onClick={() => setChartMode('count')}
+                className="h-8 px-3"
+              >
+                Count
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={chartMode === 'percentage' ? 'default' : 'ghost'}
+                onClick={() => setChartMode('percentage')}
+                className="h-8 px-3"
+              >
+                Percentage
+              </Button>
+            </div>
+          </div>
           <ResponsiveContainer width="100%" height={200}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
@@ -361,23 +422,22 @@ export function PollCard({
                 className="text-xs"
                 tick={{ fontSize: 12 }}
               />
-              <YAxis
-                className="text-xs"
-                tick={{ fontSize: 12 }}
-              />
+              <YAxis className="text-xs" tick={{ fontSize: 12 }} {...chartYAxisProps} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: 'hsl(var(--background))',
                   border: '1px solid hsl(var(--border))',
                   borderRadius: '6px',
                 }}
+                formatter={chartTooltipFormatter}
               />
               <Legend wrapperStyle={{ fontSize: '12px' }} />
               {poll.options.map((option, index) => (
                 <Line
                   key={option.id}
                   type="monotone"
-                  dataKey={option.text}
+                  dataKey={chartMode === 'percentage' ? `${String(option.id)}_percentage` : String(option.id)}
+                  name={option.text}
                   stroke={colors[index % colors.length]}
                   strokeWidth={2}
                   dot={false}

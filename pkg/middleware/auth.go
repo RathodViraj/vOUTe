@@ -2,8 +2,14 @@ package middleware
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +21,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/mongo"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 var db *MiddleWareDB
@@ -316,7 +324,199 @@ func ResetPassword(c *gin.Context) {
 	response.SendResponse(c, http.StatusOK, "success", "password reset successfully", nil)
 }
 
-// SignupWithOTP handles user registration with OTP verification
+func getGoogleOAuthConfig() (*oauth2.Config, error) {
+	clientID := strings.TrimSpace(utils.GetEnv("GOOGLE_CLIENT_ID", ""))
+	if clientID == "" {
+		clientID = strings.TrimSpace(utils.GetEnv("OAUTH_CLIENT_ID", ""))
+	}
+	clientSecret := strings.TrimSpace(utils.GetEnv("GOOGLE_CLIENT_SECRET", ""))
+	if clientSecret == "" {
+		clientSecret = strings.TrimSpace(utils.GetEnv("OAUTH_CLIENT_SECRET", ""))
+	}
+	redirectURL := strings.TrimSpace(utils.GetEnv("GOOGLE_REDIRECT_URL", "http://localhost:8080/auth/google/callback"))
+
+	if clientID == "" || clientSecret == "" {
+		return nil, errors.New("google oauth is not configured")
+	}
+
+	return &oauth2.Config{
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  redirectURL,
+		Scopes:       []string{"openid", "email", "profile"},
+		Endpoint:     google.Endpoint,
+	}, nil
+}
+
+func generateRandomState() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func sanitizeUsername(input string) string {
+	re := regexp.MustCompile(`[^a-zA-Z0-9_]`)
+	trimmed := re.ReplaceAllString(strings.ToLower(strings.TrimSpace(input)), "")
+	if trimmed == "" {
+		return "voter"
+	}
+	if len(trimmed) < 3 {
+		return trimmed + "_user"
+	}
+	return trimmed
+}
+
+func generateRandomPassword() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func getOrCreateGoogleUser(ctx context.Context, email, name string) (int64, string, string, error) {
+	userID, username, _, role, err := db.FetchUserByEmail(ctx, email)
+	if err == nil {
+		return userID, username, role, nil
+	}
+	if err.Error() != "invalid credntials" {
+		return 0, "", "", err
+	}
+
+	base := strings.Split(email, "@")[0]
+	if strings.TrimSpace(name) != "" {
+		base = strings.ReplaceAll(name, " ", "_")
+	}
+	base = sanitizeUsername(base)
+
+	password, err := generateRandomPassword()
+	if err != nil {
+		return 0, "", "", err
+	}
+
+	for i := 0; i < 50; i++ {
+		candidate := base
+		if i > 0 {
+			candidate = fmt.Sprintf("%s%d", base, i)
+		}
+
+		createdID, createErr := db.CreateUser(ctx, candidate, email, password)
+		if createErr == nil {
+			return createdID, candidate, "user", nil
+		}
+
+		if strings.Contains(createErr.Error(), "email already exists") {
+			uid, uname, _, r, fetchErr := db.FetchUserByEmail(ctx, email)
+			if fetchErr == nil {
+				return uid, uname, r, nil
+			}
+		}
+
+		if !strings.Contains(createErr.Error(), "username already exists") {
+			return 0, "", "", createErr
+		}
+	}
+
+	return 0, "", "", errors.New("failed to allocate username for google account")
+}
+
+func GoogleLogin(c *gin.Context) {
+	conf, err := getGoogleOAuthConfig()
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", err.Error(), nil)
+		return
+	}
+
+	state, err := generateRandomState()
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to start google auth", nil)
+		return
+	}
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("google_oauth_state", state, 300, "/", "", useSecureCookies(), true)
+	c.Redirect(http.StatusTemporaryRedirect, conf.AuthCodeURL(state))
+}
+
+func GoogleCallback(c *gin.Context) {
+	state := c.Query("state")
+	code := c.Query("code")
+	if state == "" || code == "" {
+		response.SendResponse(c, http.StatusBadRequest, "error", "missing google callback params", nil)
+		return
+	}
+
+	savedState, err := c.Cookie("google_oauth_state")
+	if err != nil || savedState == "" || savedState != state {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid oauth state", nil)
+		return
+	}
+
+	conf, err := getGoogleOAuthConfig()
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", err.Error(), nil)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	tok, err := conf.Exchange(ctx, code)
+	if err != nil {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "failed to exchange google code", nil)
+		return
+	}
+
+	client := conf.Client(ctx, tok)
+	resp, err := client.Get("https://www.googleapis.com/oauth2/v3/userinfo")
+	if err != nil {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "failed to fetch google profile", nil)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "google profile request failed", nil)
+		return
+	}
+
+	var profile struct {
+		Email         string `json:"email"`
+		EmailVerified bool   `json:"email_verified"`
+		Name          string `json:"name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "failed to parse google profile", nil)
+		return
+	}
+
+	if profile.Email == "" || !profile.EmailVerified {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "google email is not verified", nil)
+		return
+	}
+
+	userID, username, role, err := getOrCreateGoogleUser(ctx, profile.Email, profile.Name)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to login with google", nil)
+		return
+	}
+
+	pair, err := generateTokePair(strconv.FormatInt(userID, 10), username, role)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "could not generate tokens", nil)
+		return
+	}
+
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", useSecureCookies(), true)
+
+	frontendURL := strings.TrimRight(utils.GetEnv("FRONTEND_URL", "http://localhost:5173"), "/")
+	redirectURL := frontendURL + "/auth/google/callback?access_token=" + url.QueryEscape(pair.AccessToken)
+	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
+}
+
 func SignupWithOTP(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -327,13 +527,11 @@ func SignupWithOTP(c *gin.Context) {
 		return
 	}
 
-	// Verify OTP
 	if db.emailService == nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "email service not configured", nil)
 		return
 	}
 
-	// Validate verification token and retrieve email
 	email, err := db.emailService.GetEmailByVerificationToken(ctx, req.VerificationToken)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to validate verification token: "+err.Error(), nil)
@@ -344,14 +542,12 @@ func SignupWithOTP(c *gin.Context) {
 		return
 	}
 
-	// Create user
 	userID, err := db.CreateUser(ctx, req.Username, req.Email, req.Password)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", err.Error(), nil)
 		return
 	}
 
-	// Generate token pair
 	pair, err := generateTokePair(strconv.FormatInt(userID, 10), req.Username, "user")
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "could not generate tokens", nil)
@@ -363,7 +559,6 @@ func SignupWithOTP(c *gin.Context) {
 	response.SendResponse(c, http.StatusOK, "success", "signup successful", pair)
 }
 
-// LoginWithOTP handles login with OTP verification (email)
 func LoginWithOTP(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -374,7 +569,6 @@ func LoginWithOTP(c *gin.Context) {
 		return
 	}
 
-	// Verify OTP
 	if db.emailService == nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "email service not configured", nil)
 		return
@@ -391,14 +585,12 @@ func LoginWithOTP(c *gin.Context) {
 		return
 	}
 
-	// Fetch user by email
 	userID, username, _, role, err := db.FetchUserByEmail(ctx, req.Email)
 	if err != nil {
 		response.SendResponse(c, http.StatusUnauthorized, "error", "user not found", nil)
 		return
 	}
 
-	// Generate token pair
 	pair, err := generateTokePair(strconv.FormatInt(userID, 10), username, role)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "could not generate tokens", nil)
@@ -410,7 +602,6 @@ func LoginWithOTP(c *gin.Context) {
 	response.SendResponse(c, http.StatusOK, "success", "login successful", pair)
 }
 
-// LoginWithOTPUsername handles login with OTP verification (username)
 func LoginWithOTPUsername(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -421,7 +612,6 @@ func LoginWithOTPUsername(c *gin.Context) {
 		return
 	}
 
-	// Get email from username
 	if db.emailService == nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "email service not configured", nil)
 		return
@@ -433,7 +623,6 @@ func LoginWithOTPUsername(c *gin.Context) {
 		return
 	}
 
-	// Verify OTP
 	isValid, err := db.emailService.VerifyOTP(ctx, email, req.OTP)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to verify OTP: "+err.Error(), nil)
@@ -445,14 +634,12 @@ func LoginWithOTPUsername(c *gin.Context) {
 		return
 	}
 
-	// Fetch user by username
 	userID, _, role, err := db.FetchUserByUsername(ctx, req.Username)
 	if err != nil {
 		response.SendResponse(c, http.StatusUnauthorized, "error", "user not found", nil)
 		return
 	}
 
-	// Generate token pair
 	pair, err := generateTokePair(strconv.FormatInt(userID, 10), req.Username, role)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "could not generate tokens", nil)

@@ -79,6 +79,8 @@ func main() {
 	})
 
 	r.POST("/auth/login", middleware.Login)
+	r.GET("/auth/google/login", middleware.GoogleLogin)
+	r.GET("/auth/google/callback", middleware.GoogleCallback)
 	r.POST("/auth/refresh", middleware.RefershToken)
 	r.POST("/auth/logout", middleware.Logout)
 	r.POST("/auth/reset-password", middleware.ResetPassword)
@@ -88,10 +90,8 @@ func main() {
 	mailHandler := mailing.NewMailingHandler(mailSvc)
 	mailHandler.RegisterRoutes(r)
 
-	// Add mailing service to middleware for OTP authentication
 	middleware.AddMailingServiceInMiddleware(mailSvc)
 
-	// OTP-based authentication routes
 	r.POST("/auth/signup-otp", middleware.SignupWithOTP)
 	r.POST("/auth/login-otp", middleware.LoginWithOTP)
 	r.POST("/auth/login-otp-username", middleware.LoginWithOTPUsername)

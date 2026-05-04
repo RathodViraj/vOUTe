@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Card } from '../components/ui/card';
 import { toast } from 'sonner';
-import { requestOTP as apiRequestOTP, verifyOTP as apiVerifyOTP, signupWithOTP as apiSignupWithOTP } from '../lib/api';
+import { CheckCircle2, XCircle } from 'lucide-react';
+import { requestOTP as apiRequestOTP, verifyOTP as apiVerifyOTP, signupWithOTP as apiSignupWithOTP, checkUsernameAvailability as checkUsernameAvailabilityRequest } from '../lib/api';
 
 export function SignupOTPPage() {
   const navigate = useNavigate();
@@ -18,10 +19,44 @@ export function SignupOTPPage() {
   const [loading, setLoading] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [verificationToken, setVerificationToken] = useState<string | null>(null);
+  const [isCheckingUsername, setIsCheckingUsername] = useState(false);
+  const [usernameAvailable, setUsernameAvailable] = useState<boolean | null>(null);
+  const usernameDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (usernameDebounceRef.current) clearTimeout(usernameDebounceRef.current);
+    };
+  }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+    
+    if (name === 'username') {
+      setUsernameAvailable(null);
+      if (usernameDebounceRef.current) clearTimeout(usernameDebounceRef.current);
+      usernameDebounceRef.current = setTimeout(() => {
+        validateUsernameAvailability(value);
+      }, 500);
+    }
+  };
+
+  const validateUsernameAvailability = async (value: string) => {
+    if (value.length < 3) {
+      setUsernameAvailable(null);
+      return;
+    }
+
+    setIsCheckingUsername(true);
+    try {
+      const available = await checkUsernameAvailabilityRequest(value);
+      setUsernameAvailable(available);
+    } catch {
+      setUsernameAvailable(null);
+    } finally {
+      setIsCheckingUsername(false);
+    }
   };
 
   const requestOTP = async () => {
@@ -45,6 +80,11 @@ export function SignupOTPPage() {
   const completeSignup = async () => {
     if (!formData.username || !formData.password || !verificationToken) {
       toast.error('Please fill in all fields');
+      return;
+    }
+
+    if (!usernameAvailable) {
+      toast.error('Please choose an available username');
       return;
     }
 
@@ -97,14 +137,27 @@ export function SignupOTPPage() {
           {/* Username */}
           <div className="space-y-2">
             <label className="text-sm font-medium">Username</label>
-            <Input
-              type="text"
-              name="username"
-              placeholder="john_doe"
-              value={formData.username}
-              onChange={handleInputChange}
-              disabled={loading || otpSent}
-            />
+            <div className="relative">
+              <Input
+                type="text"
+                name="username"
+                placeholder="john_doe"
+                value={formData.username}
+                onChange={handleInputChange}
+                disabled={loading || otpSent}
+              />
+              {formData.username.length >= 3 && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                  {isCheckingUsername ? (
+                    <div className="w-5 h-5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                  ) : usernameAvailable ? (
+                    <CheckCircle2 className="w-5 h-5 text-green-500" />
+                  ) : (
+                    <XCircle className="w-5 h-5 text-red-500" />
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Email */}
@@ -140,7 +193,7 @@ export function SignupOTPPage() {
                   type="text"
                   name="otp"
                   placeholder="123456"
-                  maxLength="6"
+                  maxLength={6}
                   value={formData.otp}
                   onChange={handleInputChange}
                   disabled={loading || !!verificationToken}
@@ -171,7 +224,7 @@ export function SignupOTPPage() {
           {/* Submit Button */}
           <Button
             onClick={completeSignup}
-            disabled={loading || !verificationToken}
+            disabled={loading || !verificationToken || !usernameAvailable || formData.username.length < 3}
             className="w-full bg-indigo-600 hover:bg-indigo-700"
           >
             {loading ? 'Creating Account...' : 'Create Account'}

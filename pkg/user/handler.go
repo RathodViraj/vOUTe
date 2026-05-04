@@ -63,29 +63,7 @@ func (h *userHandler) checkUsernameExists(c *gin.Context) {
 }
 
 func (h *userHandler) createUser(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	var req CreateUserRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.SendResponse(c, http.StatusBadRequest, "error", "invalid data", nil)
-		return
-	}
-
-	if h.bloom.MightExist(req.Username) {
-		response.SendResponse(c, http.StatusBadRequest, "error", "username already exists", nil)
-		return
-	}
-
-	user, err := h.userService.CreateUser(ctx, req.Username, req.Email, req.Password, req.Role)
-	if err != nil {
-		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to create user", err.Error())
-		return
-	}
-
-	h.bloom.Add(req.Username)
-	user.Password = ""
-	response.SendResponse(c, http.StatusOK, "success", "user created successfully", user)
+	response.SendResponse(c, http.StatusForbidden, "error", "direct signup is disabled. Use OTP signup or Google login", nil)
 }
 
 func (h *userHandler) getUserByEmail(c *gin.Context) {

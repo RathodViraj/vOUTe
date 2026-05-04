@@ -73,13 +73,22 @@ function getAccessToken(): string | null {
 
 export function setAccessToken(token: string) {
   sessionStorage.setItem(ACCESS_TOKEN_KEY, token);
-  // Trigger auth re-check in AuthContext
-  window.dispatchEvent(new Event('auth-token-changed'));
+  // Notify other parts of the app (AuthContext) that the token changed
+  try {
+    window.dispatchEvent(new Event('auth-token-changed'));
+  } catch (e) {
+    // ignore in non-browser contexts
+  }
 }
 
 export function clearAccessToken() {
   sessionStorage.removeItem(ACCESS_TOKEN_KEY);
   localStorage.removeItem(ACCESS_TOKEN_KEY);
+  try {
+    window.dispatchEvent(new Event('auth-token-changed'));
+  } catch (e) {
+    // ignore
+  }
 }
 
 export function hasAccessToken() {
@@ -394,53 +403,47 @@ export async function getPastVotes(): Promise<Poll[]> {
   return attachHistory(votes || []);
 }
 
-// OTP Authentication API
-
-export async function requestOTP(email: string, username?: string) {
-  const payload = email ? { email } : { username };
+// --- OTP / Verification helpers used by the UI ---
+export async function requestOTP(email?: string, username?: string) {
   await request('/mailing/otp', {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ email, username }),
   });
 }
 
-export async function verifyOTP(email: string, otp: string) {
-  const data = await request<{ verification_token?: string }>('/mailing/verify-otp', {
+export async function verifyOTP(email: string, otp: string): Promise<string | null> {
+  const data = await request<{ verification_token: string | null }>('/mailing/verify-otp', {
     method: 'POST',
     body: JSON.stringify({ email, otp }),
   });
-  return data.verification_token;
+
+  return data.verification_token || null;
 }
 
-export async function signupWithOTP(username: string, email: string, password: string, verification_token: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
-  const data = await request<{ access_token: string; refresh_token: string; expires_in: number }>('/auth/signup-otp', {
+export async function signupWithOTP(username: string, email: string, password: string, verificationToken: string) {
+  const data = await request<{ access_token?: string }>('/auth/signup-otp', {
     method: 'POST',
-    body: JSON.stringify({ username, email, password, verification_token }),
+    body: JSON.stringify({ username, email, password, verification_token: verificationToken }),
   });
-  if (data.access_token) {
-    setAccessToken(data.access_token);
-  }
+
+  if (data?.access_token) setAccessToken(data.access_token);
   return data;
 }
 
-export async function loginWithOTP(email: string, otp: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
-  const data = await request<{ access_token: string; refresh_token: string; expires_in: number }>('/auth/login-otp', {
+export async function loginWithOTP(email: string, otp: string) {
+  const data = await request<{ access_token: string }>('/auth/login-otp', {
     method: 'POST',
     body: JSON.stringify({ email, otp }),
   });
-  if (data.access_token) {
-    setAccessToken(data.access_token);
-  }
-  return data;
+
+  setAccessToken(data.access_token);
 }
 
-export async function loginWithOTPUsername(username: string, otp: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
-  const data = await request<{ access_token: string; refresh_token: string; expires_in: number }>('/auth/login-otp-username', {
+export async function loginWithOTPUsername(username: string, otp: string) {
+  const data = await request<{ access_token: string }>('/auth/login-otp-username', {
     method: 'POST',
     body: JSON.stringify({ username, otp }),
   });
-  if (data.access_token) {
-    setAccessToken(data.access_token);
-  }
-  return data;
+
+  setAccessToken(data.access_token);
 }
