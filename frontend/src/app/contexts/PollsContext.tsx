@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useState, ReactNode, useEffect } from 'react';
 import { closePoll as closePollRequest, createPoll as createPollRequest, getMyPolls, getPollsWsUrl } from '../lib/api';
+import { useAuth } from './AuthContext';
 import type { Poll } from '../lib/types';
 
 interface PollsContextType {
@@ -13,6 +14,7 @@ const PollsContext = createContext<PollsContextType | undefined>(undefined);
 
 export function PollsProvider({ children }: { children: ReactNode }) {
   const [userPolls, setUserPolls] = useState<Poll[]>([]);
+  const { isAuthenticated } = useAuth();
 
   const refreshMyPolls = useCallback(async () => {
     const polls = await getMyPolls();
@@ -20,6 +22,11 @@ export function PollsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // Only establish WebSocket connection if user is authenticated
+    if (!isAuthenticated) {
+      return;
+    }
+
     const ws = new WebSocket(getPollsWsUrl());
 
     ws.onmessage = (event) => {
@@ -69,7 +76,7 @@ export function PollsProvider({ children }: { children: ReactNode }) {
     return () => {
       ws.close();
     };
-  }, []);
+  }, [isAuthenticated]);
 
   const createPoll = useCallback(async (title: string, options: string[]) => {
     await createPollRequest(title, options);

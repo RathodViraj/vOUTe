@@ -37,6 +37,11 @@ type HistoricDataResponse = {
   OptionsData: HistoricOptionsData[];
 };
 
+type PagedVoteResponse = {
+  items: BackendVote[];
+  next_cursor: string | null;
+};
+
 const API_BASE = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) || 'http://localhost:8080';
 const ACCESS_TOKEN_KEY = 'voute_access_token';
 
@@ -103,7 +108,7 @@ export async function refreshAccessToken() {
   setAccessToken(data.access_token);
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   options: RequestInit & { auth?: boolean } = {},
 ): Promise<T> {
@@ -233,12 +238,14 @@ export async function signup(username: string, email: string, password: string) 
 
 export async function checkUsernameAvailability(username: string): Promise<boolean> {
   const response = await fetch(`${API_BASE}/users/check?username=${encodeURIComponent(username)}`);
-  const json = (await response.json()) as ApiResponse<null>;
+  const json = (await response.json()) as ApiResponse<{ exists: boolean } | null>;
   if (!response.ok || json.type === 'error') {
     throw new Error(json?.message || 'Failed to check username');
   }
 
-  return json.message.toLowerCase().includes('does not exist');
+  // Backend returns `{ exists: boolean }` in `data`. `exists === true` means
+  // username is taken, so availability is the inverse.
+  return !(json.data?.exists ?? false);
 }
 
 export async function resetPassword(email: string, newPassword: string) {
@@ -263,10 +270,8 @@ export async function deleteAccount() {
 }
 
 export async function getPolls(status?: 'live' | 'closed'): Promise<Poll[]> {
-  const query = status ? `?status=${status}` : '';
-  const votes = await request<BackendVote[]>(`/polls${query}`, { method: 'GET' });
-
-  return attachHistory(votes || []);
+  const data = await getPollsPage({ status, take: 50 });
+  return data.items;
 }
 
 export async function getPollById(pollId: string): Promise<Poll> {
@@ -281,13 +286,65 @@ export async function getPollById(pollId: string): Promise<Poll> {
   return mapVoteToPoll(vote, historyByVoteId[String(vote.id)] || []);
 }
 
+export async function getPollsPage(options: { status?: 'live' | 'closed'; cursor?: string; take?: number } = {}): Promise<{ items: Poll[]; nextCursor: string | null }> {
+  const params = new URLSearchParams();
+  if (options.status) params.set('status', options.status);
+  if (options.cursor) params.set('cursor', options.cursor);
+  if (options.take) params.set('take', String(options.take));
+
+  const response = await request<PagedVoteResponse>(`/polls${params.toString() ? `?${params.toString()}` : ''}`, { method: 'GET' });
+  return {
+    items: (response.items || []).map((vote) => mapVoteToPoll(vote, [])),
+    nextCursor: response.next_cursor || null,
+  };
+}
+
+export async function getPollHistory(pollId: string, cursor?: string): Promise<HistoricOptionsData[]> {
+  const params = new URLSearchParams();
+  if (cursor) {
+    params.set('cursor', cursor);
+  }
+
+  const response = await fetch(`${API_BASE}/poll/${pollId}/history${params.toString() ? `?${params.toString()}` : ''}`, {
+    method: 'GET',
+    credentials: 'include',
+  });
+
+  if (response.status === 204) {
+    return [];
+  }
+
+  const json = (await response.json()) as ApiResponse<HistoricOptionsData[]>;
+  if (!response.ok || json.type === 'error') {
+    throw new Error(json?.message || 'Failed to load poll history');
+  }
+
+  return (json.data || []).map((d) => ({
+    Timestamp: String(d.Timestamp),
+    OptionID: String(d.OptionID),
+    VoteCount: Number(d.VoteCount || 0),
+  }));
+}
+
 export async function getMyPolls(): Promise<Poll[]> {
-  const votes = await request<BackendVote[]>('/polls/creator', {
+  const data = await getMyPollsPage({ take: 20 });
+  return data.items;
+}
+
+export async function getMyPollsPage(options: { cursor?: string; take?: number } = {}): Promise<{ items: Poll[]; nextCursor: string | null }> {
+  const params = new URLSearchParams();
+  if (options.cursor) params.set('cursor', options.cursor);
+  if (options.take) params.set('take', String(options.take));
+
+  const response = await request<PagedVoteResponse>(`/user/polls${params.toString() ? `?${params.toString()}` : ''}`, {
     method: 'GET',
     auth: true,
   });
 
-  return attachHistory(votes || []);
+  return {
+    items: (response.items || []).map((vote) => mapVoteToPoll(vote, [])),
+    nextCursor: response.next_cursor || null,
+  };
 }
 
 export async function createPoll(title: string, options: string[]) {
@@ -392,6 +449,20 @@ export async function createComment(voteId: string, username: string, content: s
     text: comment.content,
     timestamp: new Date((comment.created_at || 0) * 1000),
   };
+}
+
+export async function deleteComment(commentId: string): Promise<void> {
+  await request(`/comments/${commentId}`, {
+    method: 'DELETE',
+    auth: true,
+  });
+}
+
+export async function deletePoll(pollId: string): Promise<void> {
+  await request(`/polls/${pollId}`, {
+    method: 'DELETE',
+    auth: true,
+  });
 }
 
 export async function getPastVotes(): Promise<Poll[]> {

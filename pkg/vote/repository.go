@@ -3,11 +3,14 @@ package vote
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"log"
 	"strconv"
+	"strings"
 	"time"
+
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -66,9 +69,9 @@ type VoteRepository interface {
 	CreateVoteInMongo(ctx context.Context, vote *CreateVoteInMogo) error
 	AddOptionsInMongo(ctx context.Context, voteID int64, options []Option) error
 	GetVoteByID(ctx context.Context, id string) (*Vote, error)
-	GetVotesByCreatorID(ctx context.Context, creatorID string, skip, take int) ([]*Vote, error)
-	ListVote(ctx context.Context, skip, take int) ([]*Vote, error)
-	ListLiveVote(ctx context.Context, skip, take int) ([]*Vote, error)
+	ListLiveVotePage(ctx context.Context, cursor string, take int) ([]*Vote, string, error)
+	ListVotePage(ctx context.Context, cursor string, take int) ([]*Vote, string, error)
+	GetVotesByCreatorIDPage(ctx context.Context, creatorID, cursor string, take int) ([]*Vote, string, error)
 	InitVoteInRedis(ctx context.Context, voteID int64, optionIDs []int64) error
 	AddVote(ctx context.Context, userID, voteID, optionID string, count int64) error
 	GetUserVotedPolls(ctx context.Context, userID string) ([]UserVotedPoll, error)
@@ -76,13 +79,40 @@ type VoteRepository interface {
 	EditTitle(ctx context.Context, voteID, newTitle string) error
 	CloseVoteInMongo(ctx context.Context, voteID string) error
 	DeleteVoteInRedis(ctx context.Context, voteID string) error
-	GetHistoricData(ctx context.Context, voteID string) (*HistoricDataResponse, error)
-	getIntervalForBucketCount(createdAT int64) int
+	GetPollHistory(ctx context.Context, voteID string, rangeVal string) ([]HistoricOptionsData, error)
 	UpdateStatus(ctx context.Context, id int64, newStatus string) error
 	HardDeleteVote(ctx context.Context, voteID int64) error
 	GetPollsFromIDs(ctx context.Context, votesIDs []string) ([]Vote, error)
 	GetSnapshots(ctx context.Context, pollIDs []string) ([]PollSnapshot, error)
 	PopDirtyPolls(ctx context.Context) ([]string, error)
+}
+
+type pageCursor struct {
+	CreatedAt int64
+	ID        int64
+}
+
+func parsePageCursor(cursor string) (*pageCursor, error) {
+	if cursor == "" {
+		return nil, nil
+	}
+	parts := strings.Split(cursor, ":")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid cursor")
+	}
+	createdAt, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	return &pageCursor{CreatedAt: createdAt, ID: id}, nil
+}
+
+func encodePageCursor(createdAt, id int64) string {
+	return fmt.Sprintf("%d:%d", createdAt, id)
 }
 
 type voteRepo struct {
@@ -198,93 +228,75 @@ func (r *voteRepo) GetVoteByID(ctx context.Context, id string) (*Vote, error) {
 	return &vote, nil
 }
 
-func (r *voteRepo) GetVotesByCreatorID(ctx context.Context, creatorID string, skip, take int) ([]*Vote, error) {
+func (r *voteRepo) ListVotePage(ctx context.Context, cursor string, take int) ([]*Vote, string, error) {
+	return r.listVotePage(ctx, bson.M{
+		"is_deleted": false,
+		"status":     bson.M{"$in": []string{"closed", "live"}},
+	}, cursor, take)
+}
+
+func (r *voteRepo) ListLiveVotePage(ctx context.Context, cursor string, take int) ([]*Vote, string, error) {
+	return r.listVotePage(ctx, bson.M{
+		"is_deleted": false,
+		"status":     "live",
+	}, cursor, take)
+}
+
+func (r *voteRepo) GetVotesByCreatorIDPage(ctx context.Context, creatorID, cursor string, take int) ([]*Vote, string, error) {
 	parsedCreatorID, err := parseVoteID(creatorID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	votes := []*Vote{}
-	filter := bson.M{
+	return r.listVotePage(ctx, bson.M{
 		"created_by_id": parsedCreatorID,
 		"status":        bson.M{"$in": []string{"closed", "live"}},
 		"is_deleted":    false,
-	}
-
-	options := options.Find()
-	options.SetSkip(int64(skip))
-	options.SetLimit(int64(take))
-	options.SetSort(bson.D{{Key: "created_at", Value: -1}})
-
-	cursor, err := r.mongoDB.Collection(r.voteCollection).Find(ctx, filter, options)
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	for cursor.Next(ctx) {
-		var vote Vote
-		if err := cursor.Decode(&vote); err != nil {
-			continue
-		}
-
-		options, err := r.getOptionsByVoteID(ctx, vote.ID)
-		if err != nil {
-			return nil, err
-		}
-		vote.Options = options
-
-		voteCount, err := r.getVoteCount(ctx, vote.ID)
-		if err != nil {
-			return nil, err
-		}
-
-		for i := range vote.Options {
-			if cnt, ok := voteCount[vote.Options[i].ID]; ok {
-				vote.Options[i].VoteCount = cnt
-			} else {
-				vote.Options[i].VoteCount = 0
-			}
-		}
-
-		votes = append(votes, &vote)
-	}
-
-	return votes, nil
+	}, cursor, take)
 }
 
-func (r *voteRepo) ListVote(ctx context.Context, skip, take int) ([]*Vote, error) {
-	votes := []*Vote{}
-	filter := bson.M{
-		"is_deleted": false,
-		"status":     bson.M{"$in": []string{"closed", "live"}},
+func (r *voteRepo) listVotePage(ctx context.Context, filter bson.M, cursor string, take int) ([]*Vote, string, error) {
+	if take <= 0 {
+		take = 10
+	}
+
+	queryFilter := bson.M{}
+	for k, v := range filter {
+		queryFilter[k] = v
+	}
+
+	if parsedCursor, err := parsePageCursor(cursor); err == nil && parsedCursor != nil {
+		queryFilter["$or"] = []bson.M{
+			{"created_at": bson.M{"$lt": parsedCursor.CreatedAt}},
+			{"created_at": parsedCursor.CreatedAt, "_id": bson.M{"$lt": parsedCursor.ID}},
+		}
 	}
 
 	options := options.Find()
-	options.SetSkip(int64(skip))
-	options.SetLimit(int64(take))
-	options.SetSort(bson.D{{Key: "created_at", Value: -1}})
+	options.SetLimit(int64(take + 1))
+	options.SetSort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}})
 
-	cursor, err := r.mongoDB.Collection(r.voteCollection).Find(ctx, filter, options)
+	cursorRes, err := r.mongoDB.Collection(r.voteCollection).Find(ctx, queryFilter, options)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	defer cursor.Close(ctx)
+	defer cursorRes.Close(ctx)
 
-	for cursor.Next(ctx) {
+	votes := make([]*Vote, 0, take+1)
+	for cursorRes.Next(ctx) {
 		var vote Vote
-		if err := cursor.Decode(&vote); err != nil {
+		if err := cursorRes.Decode(&vote); err != nil {
 			continue
 		}
 
 		options, err := r.getOptionsByVoteID(ctx, vote.ID)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		vote.Options = options
 
 		voteCount, err := r.getVoteCount(ctx, vote.ID)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 
 		for i := range vote.Options {
@@ -294,58 +306,17 @@ func (r *voteRepo) ListVote(ctx context.Context, skip, take int) ([]*Vote, error
 				vote.Options[i].VoteCount = 0
 			}
 		}
+
 		votes = append(votes, &vote)
 	}
 
-	return votes, nil
-}
-
-func (r *voteRepo) ListLiveVote(ctx context.Context, skip, take int) ([]*Vote, error) {
-	votes := []*Vote{}
-	filter := bson.M{
-		"is_deleted": false,
-		"status":     "live",
+	nextCursor := ""
+	if len(votes) > take {
+		nextCursor = encodePageCursor(votes[take-1].CreatedAt, votes[take-1].ID)
+		votes = votes[:take]
 	}
 
-	options := options.Find()
-	options.SetSkip(int64(skip))
-	options.SetLimit(int64(take))
-	options.SetSort(bson.D{{Key: "created_at", Value: -1}})
-
-	cursor, err := r.mongoDB.Collection(r.voteCollection).Find(ctx, filter, options)
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	for cursor.Next(ctx) {
-		var vote Vote
-		if err := cursor.Decode(&vote); err != nil {
-			continue
-		}
-
-		options, err := r.getOptionsByVoteID(ctx, vote.ID)
-		if err != nil {
-			continue
-		}
-		vote.Options = options
-
-		voteCount, err := r.getVoteCount(ctx, vote.ID)
-		if err != nil {
-			continue
-		}
-
-		for i := range vote.Options {
-			if cnt, ok := voteCount[vote.Options[i].ID]; ok {
-				vote.Options[i].VoteCount = cnt
-			} else {
-				vote.Options[i].VoteCount = 0
-			}
-		}
-		votes = append(votes, &vote)
-	}
-
-	return votes, nil
+	return votes, nextCursor, nil
 }
 
 func (r *voteRepo) getVoteCount(ctx context.Context, voteID int64) (map[int64]int64, error) {
@@ -425,7 +396,7 @@ func (r *voteRepo) AddVote(ctx context.Context, userID, voteID, optionID string,
 		strconv.FormatInt(now.Add(-48*time.Hour).Unix(), 10),
 	)
 	pipe.Expire(ctx, userVotedPollsKey(parsedUserID), 48*time.Hour)
-	
+
 	pipe.HSet(ctx, metaKey, voteID, fmt.Sprintf("%d|%d", parsedOptionID, newTotalCount))
 	pipe.Expire(ctx, metaKey, 48*time.Hour)
 
@@ -433,6 +404,8 @@ func (r *voteRepo) AddVote(ctx context.Context, userID, voteID, optionID string,
 	pipe.HIncrBy(ctx, voteKey(parsedVoteID), strconv.FormatInt(parsedOptionID, 10), count)
 	// Mark this poll as dirty for the WS broadcaster
 	pipe.SAdd(ctx, dirtyPollsKey, voteID)
+	// Ensure poll is considered active for snapshot worker
+	pipe.SAdd(ctx, activePollsKey(), voteID)
 
 	_, err = pipe.Exec(ctx)
 	if err != nil {
@@ -440,9 +413,8 @@ func (r *voteRepo) AddVote(ctx context.Context, userID, voteID, optionID string,
 	}
 
 	// Vote mutation is already committed in Redis at this point.
-	// Snapshot persistence should not fail the request, otherwise clients can
-	// see a successful live count update but receive an API error.
-	_ = r.saveSnapshot(ctx, parsedVoteID)
+	// Snapshot persistence is now handled by a background worker; do not
+	// block vote API on DB snapshot writes.
 	return nil
 }
 func (r *voteRepo) saveSnapshot(ctx context.Context, voteID int64) error {
@@ -485,6 +457,140 @@ func userVotedPollsKey(userID int64) string {
 
 func userVotedMetaKey(userID int64) string {
 	return "user:voted:meta:" + strconv.FormatInt(userID, 10)
+}
+
+func activePollsKey() string {
+	return "active_polls"
+}
+
+// GetPollHistory returns 1-hour bucketed aggregated snapshot data for a 24-hour slice before cursor.
+// Results are cached in Redis for 5 minutes.
+func (r *voteRepo) GetPollHistory(ctx context.Context, voteID string, cursor string) ([]HistoricOptionsData, error) {
+	parsedVoteID, err := strconv.ParseInt(voteID, 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	voteCollection := r.mongoDB.Collection(r.voteCollection)
+	var pollDoc struct {
+		CreatedAt int64 `bson:"created_at"`
+	}
+	if err := voteCollection.FindOne(ctx, bson.M{"_id": parsedVoteID}).Decode(&pollDoc); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	pollCreatedAt := time.Unix(pollDoc.CreatedAt, 0).UTC()
+	maxHistoryStart := now.Add(-7 * 24 * time.Hour)
+
+	parseCursor := func(raw string) time.Time {
+		if raw == "" {
+			return now
+		}
+		if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			return parsed.UTC()
+		}
+		if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+			return parsed.UTC()
+		}
+		if unix, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return time.Unix(unix, 0).UTC()
+		}
+		return now
+	}
+
+	cursorTime := parseCursor(cursor)
+	if cursorTime.After(now) {
+		cursorTime = now
+	}
+
+	windowEnd := cursorTime.Truncate(time.Hour)
+	if windowEnd.After(now.Truncate(time.Hour)) {
+		windowEnd = now.Truncate(time.Hour)
+	}
+	if windowEnd.Before(maxHistoryStart) || windowEnd.Equal(maxHistoryStart) {
+		return nil, nil
+	}
+
+	windowStart := windowEnd.Add(-24 * time.Hour)
+	if windowStart.Before(maxHistoryStart) {
+		windowStart = maxHistoryStart
+	}
+
+	if pollCreatedAt.After(windowEnd) {
+		return nil, nil
+	}
+
+	ceilHour := func(t time.Time) time.Time {
+		truncated := t.Truncate(time.Hour)
+		if t.Equal(truncated) {
+			return truncated
+		}
+		return truncated.Add(time.Hour)
+	}
+	if pollCreatedAt.After(windowStart) {
+		windowStart = ceilHour(pollCreatedAt)
+		if windowStart.Equal(windowEnd) {
+			windowEnd = windowEnd.Add(time.Hour)
+		}
+	}
+
+	if !windowStart.Before(windowEnd) {
+		return nil, nil
+	}
+
+	cacheCursor := cursor
+	if cacheCursor == "" {
+		cacheCursor = "latest"
+	}
+	cacheKey := fmt.Sprintf("poll:%s:history:%s", voteID, cacheCursor)
+	if cached, err := r.rdb.Get(ctx, cacheKey).Result(); err == nil && cached != "" {
+		var out []HistoricOptionsData
+		if err := json.Unmarshal([]byte(cached), &out); err == nil {
+			return out, nil
+		}
+	}
+
+	query := `SELECT time_bucket('1 hour', created_at) AS bucket, option_id, MAX(vote_count) as votes
+	FROM vote_snapshots
+	WHERE vote_id = $1
+	AND created_at >= $2
+	AND created_at < $3
+	GROUP BY bucket, option_id
+	ORDER BY bucket;`
+
+	rows, err := r.timescaleDB.QueryContext(ctx, query, parsedVoteID, windowStart, windowEnd)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var resp []HistoricOptionsData
+	for rows.Next() {
+		var bucket time.Time
+		var optionID int64
+		var votes int64
+		if err := rows.Scan(&bucket, &optionID, &votes); err != nil {
+			continue
+		}
+		resp = append(resp, HistoricOptionsData{
+			Timestamp: bucket,
+			OptionID:  strconv.FormatInt(optionID, 10),
+			VoteCount: int(votes),
+		})
+	}
+
+	if len(resp) == 0 {
+		return nil, nil
+	}
+
+	if data, marshalErr := json.Marshal(resp); marshalErr == nil {
+		if setErr := r.rdb.Set(ctx, cacheKey, string(data), 5*time.Minute).Err(); setErr != nil {
+			log.Printf("[GetPollHistory] WARNING: Failed to cache data for voteID %s: %v", voteID, setErr)
+		}
+	}
+
+	return resp, nil
 }
 
 func (r *voteRepo) GetUserVotedPolls(ctx context.Context, userID string) ([]UserVotedPoll, error) {
@@ -631,86 +737,6 @@ func (r *voteRepo) GetSnapshots(ctx context.Context, pollIDs []string) ([]PollSn
 	}
 
 	return snapshots, nil
-}
-
-func (r *voteRepo) GetHistoricData(ctx context.Context, voteID string) (*HistoricDataResponse, error) {
-	parsedID, err := parseVoteID(voteID)
-	if err != nil {
-		return nil, err
-	}
-	query := `
-		SELECT
-		time_bucket_gapfill(make_interval(mins => $1), created_at) AS bucket,
-		option_id,
-		locf(MAX(vote_count)) AS votes
-		FROM vote_snapshots
-		WHERE vote_id = $2
-		AND created_at >= $3
-		AND created_at <= $4
-		GROUP BY bucket, option_id
-		ORDER BY bucket;
- 	`
-
-	end := time.Now().UTC()
-	start := end.Add(-24 * time.Hour)
-
-	// Keep chart granularity readable and stable for the "Last 24h" UI.
-	// 48 buckets -> one point every 30 minutes.
-	const targetBuckets = 48
-	interval := int((24 * 60) / targetBuckets)
-	res, err := r.timescaleDB.QueryContext(ctx, query, interval, parsedID, start, end)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("no data availble")
-		}
-
-		return nil, err
-	}
-
-	response := &HistoricDataResponse{
-		VoteID:      voteID,
-		OptionsData: []HistoricOptionsData{},
-	}
-
-	for res.Next() {
-		var opData HistoricOptionsData
-		var optionID int64
-		if err := res.Scan(&opData.Timestamp, &optionID, &opData.VoteCount); err != nil {
-			continue
-		}
-		opData.OptionID = strconv.FormatInt(optionID, 10)
-
-		response.OptionsData = append(response.OptionsData, opData)
-	}
-
-	return response, nil
-}
-
-func (r *voteRepo) getIntervalForBucketCount(createdAT int64) int {
-	now := time.Now()
-
-	switch {
-	case createdAT < now.Add(-30*time.Minute).Unix():
-		return 2
-
-	case createdAT < now.Add(-90*time.Minute).Unix():
-		return 5
-
-	case createdAT < now.Add(-5*time.Hour).Unix():
-		return 10
-
-	case createdAT < now.Add(-12*time.Hour).Unix():
-		return 20
-
-	case createdAT < now.Add(-2*24*time.Hour).Unix():
-		return 60
-
-	case createdAT < now.Add(-7*24*time.Hour).Unix():
-		return 180
-
-	default:
-		return 1440
-	}
 }
 
 func (r *voteRepo) CloseVoteInMongo(ctx context.Context, voteID string) error {

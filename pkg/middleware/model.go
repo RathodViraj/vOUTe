@@ -3,7 +3,9 @@ package middleware
 import (
 	"context"
 	"errors"
+	"time"
 	"voute/pkg/mailing"
+	"voute/pkg/utils"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -95,14 +97,19 @@ func (d *MiddleWareDB) ResetPassword(ctx context.Context, email, newPassword str
 		"is_deleted": false,
 	}
 
+	newHashPass, err := utils.HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
 	update := bson.M{
 		"$set": bson.M{
-			"password": newPassword,
+			"password": newHashPass,
 		},
 	}
 
 	opts := options.Update().SetUpsert(true)
-	_, err := d.mongoDatabase.Collection(d.userCollectioName).UpdateOne(ctx, filter, update, opts)
+	_, err = d.mongoDatabase.Collection(d.userCollectioName).UpdateOne(ctx, filter, update, opts)
 	if err != nil {
 		return err
 	}
@@ -135,6 +142,11 @@ func (d *MiddleWareDB) CreateUser(ctx context.Context, username, email, password
 		return 0, emailResult.Err()
 	}
 
+	hashPass, err := utils.HashPassword(password)
+	if err != nil {
+		return 0, err
+	}
+
 	// Generate user ID using snowflake
 	userID := d.generateID()
 
@@ -142,15 +154,19 @@ func (d *MiddleWareDB) CreateUser(ctx context.Context, username, email, password
 		"_id":        userID,
 		"username":   username,
 		"email":      email,
-		"password":   password,
+		"password":   hashPass,
 		"role":       "user",
-		"created_at": int64(0), // Placeholder, should be current timestamp
+		"created_at": time.Now().Unix(),
 		"is_deleted": false,
 	}
 
-	_, err := d.mongoDatabase.Collection(d.userCollectioName).InsertOne(ctx, user)
+	_, err = d.mongoDatabase.Collection(d.userCollectioName).InsertOne(ctx, user)
 	if err != nil {
 		return 0, err
+	}
+
+	if bloomFilter != nil {
+		bloomFilter.Add(username)
 	}
 
 	return userID, nil

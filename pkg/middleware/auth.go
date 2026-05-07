@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 	"voute/pkg/mailing"
+	"voute/pkg/bloom"
 	"voute/pkg/response"
 	"voute/pkg/utils"
 
@@ -26,12 +28,14 @@ import (
 )
 
 var db *MiddleWareDB
+var bloomFilter *bloom.Filter
 
-func AddDBInMiddleware(mongoDB *mongo.Database, name string) {
+func AddDBInMiddleware(mongoDB *mongo.Database, name string, bf *bloom.Filter) {
 	db = &MiddleWareDB{
 		mongoDatabase:     mongoDB,
 		userCollectioName: name,
 	}
+	bloomFilter = bf
 }
 
 func AddMailingServiceInMiddleware(mailService mailing.EmailService) {
@@ -368,58 +372,14 @@ func sanitizeUsername(input string) string {
 	return trimmed
 }
 
-func generateRandomPassword() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+type CompleteGoogleSignupRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required,min=6"`
 }
 
-func getOrCreateGoogleUser(ctx context.Context, email, name string) (int64, string, string, error) {
-	userID, username, _, role, err := db.FetchUserByEmail(ctx, email)
-	if err == nil {
-		return userID, username, role, nil
-	}
-	if err.Error() != "invalid credntials" {
-		return 0, "", "", err
-	}
-
-	base := strings.Split(email, "@")[0]
-	if strings.TrimSpace(name) != "" {
-		base = strings.ReplaceAll(name, " ", "_")
-	}
-	base = sanitizeUsername(base)
-
-	password, err := generateRandomPassword()
-	if err != nil {
-		return 0, "", "", err
-	}
-
-	for i := 0; i < 50; i++ {
-		candidate := base
-		if i > 0 {
-			candidate = fmt.Sprintf("%s%d", base, i)
-		}
-
-		createdID, createErr := db.CreateUser(ctx, candidate, email, password)
-		if createErr == nil {
-			return createdID, candidate, "user", nil
-		}
-
-		if strings.Contains(createErr.Error(), "email already exists") {
-			uid, uname, _, r, fetchErr := db.FetchUserByEmail(ctx, email)
-			if fetchErr == nil {
-				return uid, uname, r, nil
-			}
-		}
-
-		if !strings.Contains(createErr.Error(), "username already exists") {
-			return 0, "", "", createErr
-		}
-	}
-
-	return 0, "", "", errors.New("failed to allocate username for google account")
+type GoogleProfileResponse struct {
+	Email        string `json:"email"`
+	ExistsAsUser bool   `json:"exists_as_user"`
 }
 
 func GoogleLogin(c *gin.Context) {
@@ -470,21 +430,24 @@ func GoogleCallback(c *gin.Context) {
 	}
 
 	client := conf.Client(ctx, tok)
-	resp, err := client.Get("https://www.googleapis.com/oauth2/v3/userinfo")
+	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
 	if err != nil {
+		fmt.Printf("GoogleCallback: failed to fetch profile: %v\n", err)
 		response.SendResponse(c, http.StatusUnauthorized, "error", "failed to fetch google profile", nil)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("GoogleCallback: profile request failed with status %d: %s\n", resp.StatusCode, string(body))
 		response.SendResponse(c, http.StatusUnauthorized, "error", "google profile request failed", nil)
 		return
 	}
 
 	var profile struct {
 		Email         string `json:"email"`
-		EmailVerified bool   `json:"email_verified"`
+		EmailVerified bool   `json:"verified_email"`
 		Name          string `json:"name"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&profile); err != nil {
@@ -497,13 +460,58 @@ func GoogleCallback(c *gin.Context) {
 		return
 	}
 
-	userID, username, role, err := getOrCreateGoogleUser(ctx, profile.Email, profile.Name)
-	if err != nil {
-		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to login with google", nil)
+	// Check if account already exists for this email
+	userID, username, _, role, err := db.FetchUserByEmail(ctx, profile.Email)
+	if err == nil {
+		// Account exists - log them in directly
+		pair, err := generateTokePair(strconv.FormatInt(userID, 10), username, role)
+		if err != nil {
+			response.SendResponse(c, http.StatusInternalServerError, "error", "could not generate tokens", nil)
+			return
+		}
+
+		c.SetSameSite(http.SameSiteLaxMode)
+		c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", useSecureCookies(), true)
+
+		frontendURL := strings.TrimRight(utils.GetEnv("FRONTEND_URL", "http://localhost:5173"), "/")
+		redirectURL := frontendURL + "/auth/google/callback?access_token=" + url.QueryEscape(pair.AccessToken)
+		c.Redirect(http.StatusTemporaryRedirect, redirectURL)
 		return
 	}
 
-	pair, err := generateTokePair(strconv.FormatInt(userID, 10), username, role)
+	// New user - store email in cookie and redirect to profile completion page
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("google_email_pending", profile.Email, 600, "/", "", useSecureCookies(), true)
+
+	frontendURL := strings.TrimRight(utils.GetEnv("FRONTEND_URL", "http://localhost:5173"), "/")
+	redirectURL := frontendURL + "/auth/google/complete-profile"
+	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
+}
+
+func CompleteGoogleSignup(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Get email from cookie
+	email, err := c.Cookie("google_email_pending")
+	if err != nil || email == "" {
+		response.SendResponse(c, http.StatusBadRequest, "error", "missing google email - please start over", nil)
+		return
+	}
+
+	var req CompleteGoogleSignupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request body", nil)
+		return
+	}
+
+	userID, err := db.CreateUser(ctx, req.Username, email, req.Password)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", err.Error(), nil)
+		return
+	}
+
+	pair, err := generateTokePair(strconv.FormatInt(userID, 10), req.Username, "user")
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "could not generate tokens", nil)
 		return
@@ -511,10 +519,8 @@ func GoogleCallback(c *gin.Context) {
 
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie("refresh_token", pair.RefershToken, int(refershTTL.Seconds()), "/", "", useSecureCookies(), true)
-
-	frontendURL := strings.TrimRight(utils.GetEnv("FRONTEND_URL", "http://localhost:5173"), "/")
-	redirectURL := frontendURL + "/auth/google/callback?access_token=" + url.QueryEscape(pair.AccessToken)
-	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
+	c.SetCookie("google_email_pending", "", -1, "/", "", useSecureCookies(), true) // Clear cookie
+	response.SendResponse(c, http.StatusOK, "success", "signup successful", pair)
 }
 
 func SignupWithOTP(c *gin.Context) {

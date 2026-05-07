@@ -5,7 +5,6 @@ import { Card } from '../components/ui/card';
 import { toast } from 'sonner';
 // Use backend base URL for OAuth redirects so dev server doesn't intercept
 const API_BASE = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) || 'http://localhost:8080';
-console.debug('[SignupPage] API_BASE =', API_BASE);
 
 export function SignupPage() {
   const navigate = useNavigate();

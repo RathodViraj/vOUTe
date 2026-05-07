@@ -1,9 +1,9 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router';
 import { PollCard } from '../components/PollCard';
 import { useSettings } from '../contexts/SettingsContext';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { getBookmarks, getPolls, getPollsWsUrl, toggleBookmark, voteOnPoll } from '../lib/api';
+import { getBookmarks, getPollsPage, getPollsWsUrl, toggleBookmark, voteOnPoll } from '../lib/api';
 import type { Poll } from '../lib/types';
 import { toast } from 'sonner';
 
@@ -18,17 +18,29 @@ export function HomePage() {
   const [polls, setPolls] = useState<Poll[]>([]);
   const [bookmarkedPolls, setBookmarkedPolls] = useState<string[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const { availableVotes, setAvailableVotes } = useOutletContext<OutletContext>();
   const { showHistoricalData } = useSettings();
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [loadedPolls, loadedBookmarks] = await Promise.all([
-          getPolls(filter === 'all' ? undefined : filter),
+        setPolls([]);
+        setNextCursor(null);
+        setHasMore(true);
+        const [page, loadedBookmarks] = await Promise.all([
+          getPollsPage({
+            status: filter === 'all' ? undefined : filter,
+            take: 50,
+          }),
           getBookmarks(),
         ]);
-        setPolls(loadedPolls);
+        setPolls(page.items);
+        setNextCursor(page.nextCursor);
+        setHasMore(Boolean(page.nextCursor));
         setBookmarkedPolls(loadedBookmarks);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Failed to load polls');
@@ -37,6 +49,44 @@ export function HomePage() {
 
     load();
   }, [filter]);
+
+  const loadMore = useCallback(async () => {
+    if (isLoadingMore || !hasMore || !nextCursor) return;
+    setIsLoadingMore(true);
+
+    try {
+      const page = await getPollsPage({
+        status: filter === 'all' ? undefined : filter,
+        cursor: nextCursor,
+        take: 50,
+      });
+
+      setPolls((prev) => [...prev, ...page.items]);
+      setNextCursor(page.nextCursor);
+      setHasMore(Boolean(page.nextCursor));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to load more polls');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [filter, hasMore, isLoadingMore, nextCursor]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          loadMore();
+        }
+      },
+      { threshold: 0.1 },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore]);
 
   const bookmarkTimersRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
 
@@ -160,6 +210,9 @@ export function HomePage() {
             showHistoricalDataByDefault={showHistoricalData}
           />
         ))}
+        <div ref={sentinelRef} className="h-10" />
+        {isLoadingMore && <p className="text-center text-sm text-muted-foreground">Loading more polls...</p>}
+        {!hasMore && polls.length > 0 && <p className="text-center text-sm text-muted-foreground">No more polls</p>}
       </div>
     </div>
   );

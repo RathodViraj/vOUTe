@@ -57,7 +57,7 @@ func main() {
 		panic(err)
 	}
 
-	middleware.AddDBInMiddleware(mongoClinet.Database("voute"), "users")
+	middleware.AddDBInMiddleware(mongoClinet.Database("voute"), "users", bloom)
 	allowedOrigins := map[string]bool{
 		"http://localhost:5173": true,
 		"http://127.0.0.1:5173": true,
@@ -81,6 +81,7 @@ func main() {
 	r.POST("/auth/login", middleware.Login)
 	r.GET("/auth/google/login", middleware.GoogleLogin)
 	r.GET("/auth/google/callback", middleware.GoogleCallback)
+	r.POST("/auth/google/complete-profile", middleware.CompleteGoogleSignup)
 	r.POST("/auth/refresh", middleware.RefershToken)
 	r.POST("/auth/logout", middleware.Logout)
 	r.POST("/auth/reset-password", middleware.ResetPassword)
@@ -105,6 +106,8 @@ func main() {
 	voteSvc := vote.NewVoteService(voteRepo)
 	voteHandler := vote.NewVoteHandler(voteSvc)
 	voteHandler.AddVoteRoutes(r)
+
+	vote.StartSnapshotWorker(ctx, voteRepo)
 
 	commentRepo := comments.NewCommentRepository(mongoClinet.Database("voute"), "comments")
 	commentSvc := comments.NewCommentService(commentRepo)

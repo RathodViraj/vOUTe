@@ -15,13 +15,13 @@ type Option struct {
 }
 
 type Vote struct {
-	ID          int64    `json:"id,omitempty,string" bson:"_id"`
-	CreatedByID int64    `json:"created_by_id,string" binding:"required" bson:"created_by_id"`
-	Title       string   `json:"title" bson:"title"`
-	Options     []Option `json:"options" bson:"options"`
-	Status      string   `json:"status" binding:"oneof=created live closed" bson:"status"`
-	IsDeleted   bool     `json:"is_deleted" bson:"is_deleted"`
-	CreatedAt   int64    `json:"created_at" bson:"created_at"`
+	ID          int64     `json:"id,omitempty,string" bson:"_id"`
+	CreatedByID int64     `json:"created_by_id,string" binding:"required" bson:"created_by_id"`
+	Title       string    `json:"title" bson:"title"`
+	Options     []Option  `json:"options" bson:"options"`
+	Status      string    `json:"status" binding:"oneof=created live closed" bson:"status"`
+	IsDeleted   bool      `json:"is_deleted" bson:"is_deleted"`
+	CreatedAt   int64     `json:"created_at" bson:"created_at"`
 	UserVote    *UserVote `json:"user_vote,omitempty" bson:"-"`
 }
 

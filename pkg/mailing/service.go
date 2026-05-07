@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"time"
 	"voute/pkg/utils"
 
@@ -149,6 +150,8 @@ func (s *emailService) VerifyOTP(ctx context.Context, email, otp string) (bool, 
 }
 
 func (s *emailService) sendEmailViaSMTP(to, subject, plainText, htmlText string) error {
+	timeout := smtpTimeout()
+
 	msg := mail.NewMsg()
 	if err := msg.From(s.senderEmail); err != nil {
 		fmt.Printf("[mailing] Failed to set From: %v\n", err)
@@ -162,24 +165,61 @@ func (s *emailService) sendEmailViaSMTP(to, subject, plainText, htmlText string)
 	// Set HTML as the primary body (not alternative) to ensure it renders properly
 	msg.SetBodyString(mail.TypeTextHTML, htmlText)
 
-	client, err := mail.NewClient(
-		s.smtpHost,
+	options := []mail.Option{
 		mail.WithPort(s.smtpPort),
 		mail.WithSMTPAuth(mail.SMTPAuthPlain),
 		mail.WithUsername(s.smtpUser),
 		mail.WithPassword(s.smtpPass),
 		mail.WithSSL(),
-	)
+	}
+	if timeout > 0 {
+		options = append(options, mail.WithTimeout(timeout))
+	}
+
+	client, err := mail.NewClient(s.smtpHost, options...)
 	if err != nil {
 		fmt.Printf("[mailing] SMTP client creation failed: %v\n", err)
 		return errors.New("failed to create SMTP client: " + err.Error())
 	}
 
 	if err := client.DialAndSend(msg); err != nil {
-		fmt.Printf("[mailing] SMTP send failed: %v\n", err)
+		// If port 465 fails, try fallback to port 587 with TLS before
+		// reporting an error to avoid noisy logs on transient SSL failures.
+		if s.smtpPort == 465 {
+			fmt.Printf("[mailing] Primary SMTP route failed, trying TLS fallback on 587...\n")
+			fallbackOptions := []mail.Option{
+				mail.WithPort(587),
+				mail.WithSMTPAuth(mail.SMTPAuthPlain),
+				mail.WithUsername(s.smtpUser),
+				mail.WithPassword(s.smtpPass),
+				mail.WithTLSPolicy(mail.TLSMandatory),
+			}
+			if timeout > 0 {
+				fallbackOptions = append(fallbackOptions, mail.WithTimeout(timeout))
+			}
+
+			client2, err2 := mail.NewClient(s.smtpHost, fallbackOptions...)
+			if err2 == nil {
+				if err3 := client2.DialAndSend(msg); err3 == nil {
+					fmt.Printf("[mailing] Email sent successfully to %s (via TLS fallback)\n", to)
+					return nil
+				}
+				return errors.New("failed to send email via SMTP: primary route failed and fallback failed")
+			}
+			return errors.New("failed to create SMTP fallback client: " + err2.Error())
+		}
 		return errors.New("failed to send email via SMTP: " + err.Error())
 	}
 
 	fmt.Printf("[mailing] Email sent successfully to %s\n", to)
 	return nil
+}
+
+func smtpTimeout() time.Duration {
+	value := utils.GetEnv("SMTP_TIMEOUT_SECONDS", "0")
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }

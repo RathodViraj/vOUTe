@@ -12,7 +12,7 @@ export function GoogleAuthCallbackPage() {
 
     if (!token) {
       toast.error('Google login failed');
-      navigate('/login', { replace: true });
+      navigate('/auth', { replace: true });
       return;
     }
 

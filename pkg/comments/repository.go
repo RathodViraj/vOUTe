@@ -6,6 +6,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type CommentRepository interface {
@@ -42,9 +43,12 @@ func (r *commentRepo) GetCommentsByVoteID(ctx context.Context, voteID string) ([
 		"is_deleted": false,
 	}
 
+	options := options.Find().SetSort(bson.M{"created_at": -1})
+
 	cursor, err := r.mongoDB.Collection(r.collectionName).Find(
 		ctx,
 		filter,
+		options,
 	)
 	if err != nil {
 		return nil, err

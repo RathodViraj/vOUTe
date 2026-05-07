@@ -4,10 +4,9 @@ import React, { useEffect } from 'react';
 export function AuthProxy() {
   useEffect(() => {
     const API_BASE = ((import.meta as any).env?.VITE_API_BASE_URL as string | undefined) || 'http://localhost:8080';
-    // preserve path + query
+
     const target = `${API_BASE}${window.location.pathname}${window.location.search}`;
-    console.debug('[AuthProxy] redirecting to backend:', target);
-    // full navigation to backend (avoids SPA handling)
+    
     window.location.replace(target);
   }, []);
 

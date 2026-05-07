@@ -15,14 +15,13 @@ import (
 type VoteHandler interface {
 	CreateVote(c *gin.Context)
 	GetVoteByID(c *gin.Context)
-	GetVotesByCreatorID(c *gin.Context)
 	GetUserVotedPolls(c *gin.Context)
 	GetRemainingVotes(c *gin.Context)
 	CloseVote(c *gin.Context)
 	UpdateVote(c *gin.Context)
 	EditTitle(c *gin.Context)
 	GetPolls(c *gin.Context)
-	HistoricData(c *gin.Context)
+	GetUserPolls(c *gin.Context)
 	AddVoteRoutes(r *gin.Engine)
 }
 
@@ -39,7 +38,8 @@ func NewVoteHandler(service VoteService) VoteHandler {
 func (h *voteHandler) AddVoteRoutes(r *gin.Engine) {
 	register := func(group *gin.RouterGroup) {
 		group.POST("/create", middleware.AuthMiddleware(), h.CreateVote)
-		group.GET("/creator", middleware.AuthMiddleware(), h.GetVotesByCreatorID)
+		group.DELETE("/:voteID", middleware.AuthMiddleware(), h.DeleteVote)
+		group.GET("/:voteID/history", h.GetPollHistory)
 		group.GET("/voted", middleware.AuthMiddleware(), h.GetUserVotedPolls)
 		group.GET("/remaining", middleware.AuthMiddleware(), h.GetRemainingVotes)
 		group.GET("/:voteID", h.GetVoteByID)
@@ -47,11 +47,12 @@ func (h *voteHandler) AddVoteRoutes(r *gin.Engine) {
 		group.PUT("/editTitle", h.EditTitle)
 		group.GET("", h.GetPolls)
 		group.PUT("/update", middleware.AuthMiddleware(), h.UpdateVote)
-		group.POST("/getHistoricData", h.HistoricData)
 	}
 
 	register(r.Group("/polls"))
 	register(r.Group("/vote"))
+	r.GET("/poll/:voteID/history", h.GetPollHistory)
+	r.GET("/user/polls", middleware.AuthMiddleware(), h.GetUserPolls)
 }
 
 func (h *voteHandler) CreateVote(c *gin.Context) {
@@ -115,38 +116,47 @@ func (h *voteHandler) GetPolls(c *gin.Context) {
 	ctx, cancle := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancle()
 
-	skip_int, take_int := 0, 10
-	skip := c.Query("skip")
-	if skip != "" {
-		if val, err := strconv.Atoi(skip); err == nil {
-			skip_int = val
-		}
-	}
-	take := c.Query("take")
-	if take != "" {
+	take_int := 50
+	if take := c.Query("take"); take != "" {
 		if val, err := strconv.Atoi(take); err == nil {
 			take_int = val
 		}
 	}
+	cursor := c.Query("cursor")
 
-	if c.Query("status") == "live" {
-		votes, err := h.service.ListLiveVote(ctx, skip_int, take_int)
+	status := c.Query("status")
+
+	if status == "live" {
+		votes, nextCursor, err := h.service.ListLiveVotePage(ctx, cursor, take_int)
 		if err != nil {
 			response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get votes", nil)
 			return
 		}
-		response.SendResponse(c, http.StatusOK, "success", "votes retrieved successfully", votes)
-	} else {
-		votes, err := h.service.ListVote(ctx, skip_int, take_int)
-		if err != nil {
-			response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get votes", nil)
-			return
-		}
-		response.SendResponse(c, http.StatusOK, "success", "votes retrieved successfully", votes)
+		response.SendResponse(c, http.StatusOK, "success", "votes retrieved successfully", gin.H{"items": votes, "next_cursor": nextCursor})
+		return
 	}
+
+	votes, nextCursor, err := h.service.ListVotePage(ctx, cursor, take_int)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get votes", nil)
+		return
+	}
+
+	// If the client explicitly requested closed polls, filter out any live items
+	if status == "closed" {
+		filtered := make([]*Vote, 0, len(votes))
+		for _, v := range votes {
+			if v.Status == "closed" {
+				filtered = append(filtered, v)
+			}
+		}
+		votes = filtered
+	}
+
+	response.SendResponse(c, http.StatusOK, "success", "votes retrieved successfully", gin.H{"items": votes, "next_cursor": nextCursor})
 }
 
-func (h *voteHandler) GetVotesByCreatorID(c *gin.Context) {
+func (h *voteHandler) GetUserPolls(c *gin.Context) {
 	ctx, cancle := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancle()
 
@@ -156,14 +166,21 @@ func (h *voteHandler) GetVotesByCreatorID(c *gin.Context) {
 		return
 	}
 
-	creatorID := claims.UserID
-	votes, err := h.service.GetVotesByCreatorID(ctx, creatorID, 0, 10)
+	take_int := 20
+	if take := c.Query("take"); take != "" {
+		if val, err := strconv.Atoi(take); err == nil {
+			take_int = val
+		}
+	}
+	cursor := c.Query("cursor")
+
+	votes, nextCursor, err := h.service.GetVotesByCreatorIDPage(ctx, claims.UserID, cursor, take_int)
 	if err != nil {
 		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get votes", nil)
 		return
 	}
 
-	response.SendResponse(c, http.StatusOK, "success", "votes retrieved successfully", votes)
+	response.SendResponse(c, http.StatusOK, "success", "votes retrieved successfully", gin.H{"items": votes, "next_cursor": nextCursor})
 }
 
 func (h *voteHandler) GetUserVotedPolls(c *gin.Context) {
@@ -211,6 +228,32 @@ func (h *voteHandler) GetUserVotedPolls(c *gin.Context) {
 	response.SendResponse(c, http.StatusOK, "success", "voted polls retrieved successfully", votes)
 }
 
+func (h *voteHandler) GetPollHistory(c *gin.Context) {
+	ctx, cancle := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancle()
+
+	voteID := c.Param("voteID")
+	cursor := c.Query("cursor")
+	if cursor == "" {
+		if rangeVal := c.Query("range"); rangeVal != "" {
+			cursor = rangeVal
+		}
+	}
+
+	data, err := h.service.GetPollHistory(ctx, voteID, cursor)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get poll history", nil)
+		return
+	}
+
+	if len(data) == 0 {
+		c.Status(http.StatusNoContent)
+		return
+	}
+
+	response.SendResponse(c, http.StatusOK, "success", "history retrieved successfully", data)
+}
+
 func (h *voteHandler) GetRemainingVotes(c *gin.Context) {
 	ctx, cancle := context.WithTimeout(c.Request.Context(), 3*time.Second)
 	defer cancle()
@@ -240,6 +283,42 @@ func (h *voteHandler) CloseVote(c *gin.Context) {
 		return
 	}
 	response.SendResponse(c, http.StatusOK, "success", "vote closed successfully", nil)
+}
+
+func (h *voteHandler) DeleteVote(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	claims, ok := middleware.GetClaims(c)
+	if !ok || claims.UserID == "" {
+		response.SendResponse(c, http.StatusUnauthorized, "error", "invalid auth claims", nil)
+		return
+	}
+
+	voteID := c.Param("voteID")
+	vote, err := h.service.GetVoteByID(ctx, voteID)
+	if err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to load vote", nil)
+		return
+	}
+
+	if vote == nil {
+		response.SendResponse(c, http.StatusNotFound, "error", "vote not found", nil)
+		return
+	}
+
+	creatorID := strconv.FormatInt(vote.CreatedByID, 10)
+	if creatorID != claims.UserID {
+		response.SendResponse(c, http.StatusForbidden, "error", "you can only delete your own poll", nil)
+		return
+	}
+
+	if err := h.service.DeleteVote(ctx, voteID); err != nil {
+		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to delete vote", nil)
+		return
+	}
+
+	response.SendResponse(c, http.StatusOK, "success", "vote deleted successfully", nil)
 }
 
 func (h *voteHandler) UpdateVote(c *gin.Context) {
@@ -288,24 +367,4 @@ func (h *voteHandler) EditTitle(c *gin.Context) {
 	}
 
 	response.SendResponse(c, http.StatusOK, "success", "title edited successfully", nil)
-}
-
-func (h *voteHandler) HistoricData(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-	defer cancel()
-
-	var req struct {
-		IDS []string `json:"ids" binding:"required"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.SendResponse(c, http.StatusBadRequest, "error", "invalid request", nil)
-		return
-	}
-	data, err := h.service.GetHistoricData(ctx, req.IDS)
-	if err != nil {
-		response.SendResponse(c, http.StatusInternalServerError, "error", "failed to get historic data", nil)
-		return
-	}
-	response.SendResponse(c, http.StatusOK, "success", "historic data retrieved successfully", data)
 }

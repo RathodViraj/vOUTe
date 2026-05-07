@@ -124,6 +124,71 @@ go build -o voute ./cmd && ./voute
 - Rate-limit endpoints that send emails or OTP to prevent abuse. Redis is a good place for simple rate counters.
 - Validate and rotate `JWT_SECRET` and OAuth client credentials regularly.
 
+**Recent Features & Architecture Changes**
+
+*Snapshot Worker for Historical Analytics*
+- Background worker snapshots active polls every 1 minute into TimescaleDB (`vote_snapshots` table).
+- Snapshots capture vote counts for all options of each active poll at that moment.
+- Started automatically in [cmd/main.go](cmd/main.go) via `vote.StartSnapshotWorker()`.
+- Implementation: [pkg/vote/snapshot_worker.go](pkg/vote/snapshot_worker.go) — reads from Redis `active_polls` set, batch-inserts snapshots.
+- Enables time-series analytics and charting on the frontend.
+
+*Poll History API with Fixed 1-Hour Intervals*
+- `GET /polls/:id/history?range=<range>` returns aggregated vote history in fixed 1-hour time buckets.
+- **Range parameter behavior:**
+  - `range=live`: Last 1 hour of data with real-time WebSocket updates.
+  - `range=-1`: Previous 24 hours [now-24h, now).
+  - `range=-2`: Previous 24 hours before that [now-48h, now-24h).
+  - `range=-3` through `range=-7`: Similarly spaced 24-hour windows.
+- **Poll creation overlap:** If a poll was created after the requested window ends, the API returns no content (`204 No Content`). If created within the window, the API adjusts the start time to the next full hour boundary after creation, ensuring only complete 1-hour buckets are returned.
+  - Example: 12h 36m old poll with range=-1 returns 12 intervals (not 13, since start is adjusted to the next full hour).
+  - Example: 60-hour-old poll with range=-3 (48–72h window) returns intervals from hour 48 to 60 (12 intervals).
+- **Caching:** Results cached in Redis with 5-minute TTL (cache key: `poll:{id}:history:{range}`). Backend logs indicate `CACHE_HIT` or `CACHE_MISS` on each request.
+- **Logging:** Backend emits detailed logs including query window, poll age, row count, and timestamps of first/last data points returned.
+- **Empty data handling:** When no data is available (poll too new or window out of range), the handler returns `204 No Content` so the frontend can display "No data available" messages.
+- Query uses TimescaleDB's `time_bucket('1 hour', created_at)` for fixed-interval aggregation.
+- Implementation: [pkg/vote/repository.go](pkg/vote/repository.go) — `GetPollHistory()` method, [pkg/vote/handler.go](pkg/vote/handler.go) — `GetPollHistory()` handler with 204 response on empty results.
+
+
+*Cursor-Based Pagination for Poll Listings*
+- `GET /polls` (list all polls) and `GET /polls/creator` (list creator's polls) use cursor-based pagination.
+  - Cursor passed via `?cursor=<cursor_token>` query parameter.
+  - Returns `items` array and `next_cursor` for fetching the next page (or empty string if last page).
+  - Prevents issue of skipped/duplicate items when data changes between requests.
+- Frontend behavior:
+  - **Home page**: Loads 50 polls per page with IntersectionObserver for infinite scroll.
+  - **My Polls page**: Loads 20 polls per page with similar infinite scroll pattern.
+- Implementation backend: [pkg/vote/handler.go](pkg/vote/handler.go) — `GetPolls()` and `GetUserPolls()` handlers; [pkg/vote/repository.go](pkg/vote/repository.go) — `ListVotePage()` and `GetVotesByCreatorIDPage()` methods.
+- Implementation frontend: [frontend/src/app/pages/HomePage.tsx](frontend/src/app/pages/HomePage.tsx) and [MyPollsPage.tsx](frontend/src/app/pages/MyPollsPage.tsx).
+
+*Real-Time Poll Updates via WebSocket (Auth-Required)*
+- WebSocket endpoint: `ws://<host>/ws/polls` — connects only after user authentication.
+- Sends live vote count updates for all open polls as changes occur.
+- Frontend establishes connection in [frontend/src/app/contexts/PollsContext.tsx](frontend/src/app/contexts/PollsContext.tsx) with authentication guard.
+  - Connection **only established if user is logged in** (checks `useAuth().isAuthenticated`).
+  - Prevents unnecessary connections before signup/login.
+- Hub implementation: [pkg/ws/hub.go](pkg/ws/hub.go) — broadcasts changes to all connected clients.
+
+*Frontend Chart Range Selector*
+- PollCard component displays vote history as a multi-line chart (using Recharts).
+- Range selector buttons allow users to view:
+  - **Live**: Last 1 hour with continuous WebSocket updates.
+  - **-1, -2, ..., -7**: Historical data (each day's worth of 1-hour intervals).
+- Chart shows empty-state messages when no data is available:
+  - "No live updates available" (for live mode when no WebSocket data).
+  - "No data available for range X" (when historical data is missing).
+- Implementation: [frontend/src/app/components/PollCard.tsx](frontend/src/app/components/PollCard.tsx).
+
+*Google OAuth v2 Integration*
+- Updated from v3 to v2 userinfo endpoint for compatibility.
+- Fixed JSON struct tag for email verification field: `verified_email` (not `email_verified`).
+- OAuth flow still triggers via `GET /auth/google/login` and `GET /auth/google/callback`.
+- Implementation: [pkg/middleware/auth.go](pkg/middleware/auth.go) — `GoogleCallback()` handler.
+
+*Branding: VOuTE → vOUTe*
+- Application now branded as **vOUTe** across all UI and documentation.
+- Logo and visual assets have been updated to reflect new branding.
+
 **Extending or troubleshooting**
 - To change mailing provider, modify [pkg/mailing] to swap `go-mail` for another client. Keep the same `SendOTP` / `VerifyOTP` contract.
 - To add providers (e.g., GitHub, Microsoft), follow the pattern in `getGoogleOAuthConfig` and add provider-specific callbacks that create/fetch users and return tokens.

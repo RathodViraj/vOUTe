@@ -6,7 +6,7 @@ import { Separator } from '../components/ui/separator';
 import { ArrowLeft } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Badge } from '../components/ui/badge';
-import { createComment, getComments, getPollById } from '../lib/api';
+import { createComment, getComments, getPollById, deleteComment } from '../lib/api';
 import type { Comment, Poll } from '../lib/types';
 import { useAuth } from '../contexts/AuthContext';
 import { Input } from '../components/ui/input';
@@ -55,6 +55,19 @@ export function CommentsPage() {
       toast.error(error instanceof Error ? error.message : 'Failed to create comment');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!commentId) return;
+    if (!window.confirm('Delete this comment? This action cannot be undone.')) return;
+
+    try {
+      await deleteComment(commentId);
+      setComments((prev) => prev.filter((c) => c.id !== commentId));
+      toast.success('Comment deleted');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to delete comment');
     }
   };
 
@@ -163,10 +176,17 @@ export function CommentsPage() {
               {comments.map(comment => (
                 <Card key={comment.id} className="p-4 hover:shadow-md transition-shadow">
                   <div className="flex items-start justify-between mb-2">
-                    <span className="font-semibold">{comment.username}</span>
-                    <span className="text-sm text-muted-foreground">
-                      {formatDistanceToNow(comment.timestamp, { addSuffix: true })}
-                    </span>
+                    <div>
+                      <span className="font-semibold">{comment.username}</span>
+                      <div className="text-sm text-muted-foreground">{formatDistanceToNow(comment.timestamp, { addSuffix: true })}</div>
+                    </div>
+                    <div>
+                      {user && user.username === comment.username && (
+                        <Button size="sm" variant="ghost" onClick={() => handleDeleteComment(comment.id)}>
+                          Delete
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   <p className="text-sm leading-relaxed">{comment.text}</p>
                 </Card>

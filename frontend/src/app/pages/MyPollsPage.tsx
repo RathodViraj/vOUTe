@@ -1,23 +1,83 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Card } from '../components/ui/card';
-import { usePolls } from '../contexts/PollsContext';
 import { FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { PollCard } from '../components/PollCard';
+import { closePoll, deletePoll, getMyPollsPage } from '../lib/api';
+import type { Poll } from '../lib/types';
 
 export function MyPollsPage() {
-  const { userPolls, closePoll, refreshMyPolls } = usePolls();
+  const [userPolls, setUserPolls] = useState<Poll[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    refreshMyPolls();
-  }, [refreshMyPolls]);
+    const load = async () => {
+      try {
+        const page = await getMyPollsPage({ take: 20 });
+        setUserPolls(page.items);
+        setNextCursor(page.nextCursor);
+        setHasMore(Boolean(page.nextCursor));
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Failed to load your polls');
+      }
+    };
+
+    load();
+  }, []);
+
+  const loadMore = useCallback(async () => {
+    if (isLoadingMore || !hasMore || !nextCursor) return;
+    setIsLoadingMore(true);
+
+    try {
+      const page = await getMyPollsPage({ cursor: nextCursor, take: 20 });
+      setUserPolls((prev) => [...prev, ...page.items]);
+      setNextCursor(page.nextCursor);
+      setHasMore(Boolean(page.nextCursor));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to load more polls');
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [hasMore, isLoadingMore, nextCursor]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          loadMore();
+        }
+      },
+      { threshold: 0.1 },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [loadMore]);
 
   const handleClosePoll = async (pollId: string) => {
     try {
       await closePoll(pollId);
+      setUserPolls((prev) => prev.map((poll) => (poll.id === pollId ? { ...poll, isLive: false } : poll)));
       toast.success('Poll closed successfully');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to close poll');
+    }
+  };
+
+  const handleDeletePoll = async (pollId: string) => {
+    try {
+      await deletePoll(pollId);
+      setUserPolls((prev) => prev.filter((poll) => poll.id !== pollId));
+      toast.success('Poll deleted successfully');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to delete poll');
     }
   };
 
@@ -54,8 +114,12 @@ export function MyPollsPage() {
               showHistoricalDataByDefault
               readOnly
               onClosePoll={handleClosePoll}
+              onDeletePoll={handleDeletePoll}
             />
           ))}
+          <div ref={sentinelRef} className="h-10" />
+          {isLoadingMore && <p className="text-center text-sm text-muted-foreground">Loading more polls...</p>}
+          {!hasMore && userPolls.length > 0 && <p className="text-center text-sm text-muted-foreground">No more polls</p>}
         </div>
       )}
     </div>

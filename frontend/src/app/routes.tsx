@@ -1,8 +1,8 @@
 import { createBrowserRouter, Navigate } from 'react-router';
 import { AppLayout } from './layouts/AppLayout';
-import { LoginPage } from './pages/LoginPage';
-import { SignupPage } from './pages/SignupPage';
+import { AuthPage } from './pages/AuthPage';
 import { GoogleAuthCallbackPage } from './pages/GoogleAuthCallbackPage';
+import { GoogleCompleteProfilePage } from './pages/GoogleCompleteProfilePage';
 import { AuthProxy } from './pages/AuthProxy';
 import { LoginOTPPage } from './pages/LoginOTPPage';
 import { SignupOTPPage } from './pages/SignupOTPPage';
@@ -16,19 +16,26 @@ import { BookmarksPage } from './pages/BookmarksPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { CommentsPage } from './pages/CommentsPage';
 import { hasAccessToken } from './lib/api';
-
 export const router = createBrowserRouter([
   {
+    path: '/auth',
+    element: <AuthPage />,
+  },
+  {
     path: '/login',
-    element: <LoginPage />,
+    element: <Navigate to="/auth" replace />,
   },
   {
     path: '/signup',
-    element: <SignupPage />,
+    element: <Navigate to="/auth" replace />,
   },
   {
     path: '/auth/google/callback',
     element: <GoogleAuthCallbackPage />,
+  },
+  {
+    path: '/auth/google/complete-profile',
+    element: <GoogleCompleteProfilePage />,
   },
   {
     // Catch any client navigation under /auth/* and forward to backend
@@ -62,7 +69,7 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: hasAccessToken() ? <Navigate to="/home" replace /> : <Navigate to="/login" replace />,
+        element: hasAccessToken() ? <Navigate to="/home" replace /> : <Navigate to="/auth" replace />,
       },
       {
         path: 'home',

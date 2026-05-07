@@ -32,8 +32,8 @@ func (h *mailingHandler) RegisterRoutes(router *gin.Engine) {
 }
 
 func (h *mailingHandler) GetOTP(c *gin.Context) {
-	// No timeout for email sending - it can take variable time
-	ctx := c.Request.Context()
+	// No timeout here: for demo reliability we let SMTP complete naturally.
+	ctx := context.Background()
 
 	var req GetOTPRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

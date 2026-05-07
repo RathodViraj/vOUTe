@@ -54,12 +54,23 @@ func (h *userHandler) checkUsernameExists(c *gin.Context) {
 		return
 	}
 
-	if h.bloom.MightExist(username) {
-		response.SendResponse(c, http.StatusOK, "success", "username might exist", nil)
-		return
+	// First check the fast bloom filter. A Bloom filter can yield false
+	// positives, so when it reports 'might exist' we verify against the DB
+	// to avoid incorrectly marking available usernames as taken.
+	exists := h.bloom.MightExist(username)
+	if exists {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		users, err := h.userService.GetUsersByUsername(ctx, username, 0, 1)
+		if err != nil {
+			response.SendResponse(c, http.StatusInternalServerError, "error", "failed to check username", nil)
+			return
+		}
+		exists = len(users) > 0
 	}
 
-	response.SendResponse(c, http.StatusOK, "success", "username does not exist", nil)
+	response.SendResponse(c, http.StatusOK, "success", "username check complete", map[string]bool{"exists": exists})
 }
 
 func (h *userHandler) createUser(c *gin.Context) {
